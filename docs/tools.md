@@ -10,7 +10,7 @@
 - **patch** — マテリアル・アセット・削除 dry-run / 確定削除・パッチ計画 (`patch_apply`) を扱う
 - **editor_assets** — RenderTexture generated asset 作成と AssetDatabase.MoveAsset による project asset 移動を行う
 - **set_property** — シンボルパス + コンポーネント型でフィールド値を狙い撃ち編集する
-- **validation** — broken reference / 配線 / 構造 / 命名整合 / ランタイムを read-only で診断する (`/prefab-sentinel:prefab-reference-repair` の起点)
+- **validation** — broken reference / 配線 / 構造 / 命名整合を read-only で診断し、`validate_runtime` は profile ごとの条件付き操作として実行する (`/prefab-sentinel:prefab-reference-repair` の起点)
 - **inspector_profile** — last-saved SerializedObject surface を読み、project-local `inspector-profile.v1` を検証・適用する
 - **symbols** — 人間可読パスで Unity オブジェクトをアドレッシングする
 - **session** — `activate_project` でスコープを宣言し、`deploy_bridge` で Bridge C# を同期する
@@ -47,8 +47,8 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `set_material_property` | patch | `.mat` ファイルのプロパティをオフライン YAML 編集 | — | write |
-| `copy_asset` | patch | project-relative `Assets/...` source を project root で正規化してコピーし、`m_Name` と `.meta` を自動同期。invalid / not-found source は normalized candidate / resolution root / reason を返す | #151 | write |
-| `rename_asset` | patch | project-relative source を正規化して同一ディレクトリ内の bare filename へリネームし `m_Name` と `.meta` を追従。project 外 source は `ASSET_RENAME_INVALID_PATH`、path-shaped `new_name` は `ASSET_RENAME_INVALID_NAME` で拒否する | — | write |
+| `copy_asset` | patch | project-relative `Assets/...` source を project root で正規化してコピーし、`m_Name` と `.meta` を自動同期。`.controller` は一意な main AnimatorController の root 名だけを改名し、dry-run に class ID / fileID を返す。invalid / not-found source は normalized candidate / resolution root / reason を返す | #151 / #228 | write |
+| `rename_asset` | patch | project-relative source を正規化して同一ディレクトリ内の bare filename へリネームし、元の `.meta` / GUID を維持する。`.controller` は main AnimatorController の root 名だけを改名し、dry-run に class ID / fileID を返す。project 外 source は `ASSET_RENAME_INVALID_PATH`、path-shaped `new_name` は `ASSET_RENAME_INVALID_NAME` で拒否する | #239 | write |
 | `delete_asset` | patch | 1 件の project asset 削除を dry-run で影響確認し、`confirm` + `change_reason` で Unity AssetDatabase 経由に適用 | #114 | write |
 | `delete_assets` | patch | 複数 project asset 削除を一括 dry-run / AssetDatabase 確定適用し、削除後 broken-reference delta を返す | #114 | write |
 | `patch_apply` | patch | パッチ計画（v2）の dry-run / confirm 適用。exactly one open Prefab は `$root` / generated handle composition、selected created-result audit、response-equal report、introduced-only validation、automatic rollback を持つ transaction。confirmed transaction は `change_reason` + contained `out_report` 必須 | #156 | write |
@@ -95,7 +95,7 @@
 | `inspect_unity_event_listeners` | validation | Button.onClick / Slider.onValueChanged / Toggle.onValueChanged の persistent listener entries と UdonSharp 診断を 1 応答で返す | #110 | read-only |
 | `validate_all_wiring` | validation | スコープ内の全 `.prefab` / `.unity` の null 参照を一括スキャンし、actionability / progress counts を deterministic path order で集約し、各 file の `inspect_wiring` key で diagnostics baseline 分類する | #100, #152, #154 | read-only |
 | `update_diagnostics_baseline` | validation | supported validation source を再実行して project root の `config/diagnostics_baseline.json` 更新を preview/write する。`mode="write"` は `confirm=True` + 非空 `change_reason` 必須 | #100 | write |
-| `validate_runtime` | validation | `compile_only` / `editor_console_only` / `clientsim` profile で runtime 検証。既定は Play Mode に入らない `compile_only`。ClientSim は明示 profile + audit pair に加え、指定 scene が唯一 loaded かつ active であることを要求し、Play Mode 終了・start-scene 復元後に3時点 side-effect report を返す | #92 | read-only |
+| `validate_runtime` | validation | `profile` 必須。`editor_console_only` は Bridge console の read-only 検査、`compile_only` は `console_authority` (`unity_log` or `editor_bridge`) を明示選択し unavailable evidence を clean にしない。`compile_only` / `clientsim` は `confirm=True` + 非空 `change_reason` + `out_report` を要する write-classで、`runtime_validation_report.v1` に compile / ClientSim の副作用を分離して返す | #92, #167, #199 | conditional/write |
 
 ### inspector_profile
 
@@ -123,8 +123,8 @@
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
 | `activate_project` | session | プロジェクトスコープ設定 + キャッシュ warm。`project_root` 明示指定可 | #244 | read-only |
-| `deploy_bridge` | session | Unity プロジェクトの Bridge C# / `.asmdef` ファイルを自動更新 | — | write |
-| `get_project_status` | session | セッション状態の表示（キャッシュ件数・スコープ・watcher・editor state）。live editor dirty identities / `state_source` / blockers / `suggested_next_action` を single status surface で返し、project-root mismatch や `EDITOR_STATE_ENUMERATION_LIMITED` も warning diagnostics / severity に引き継ぐ | #155, #239, #111, #117 | read-only |
+| `deploy_bridge` | session | complete Bridge bundle を ownership 検証付き transaction で配備（[response](api-reference.md#bridge-deployment-response-deploy_bridge) / [lifecycle](execution-reference.md#safe-bridge-deployment-transaction)） | — | write |
+| `get_project_status` | session | セッション状態の表示（キャッシュ件数・スコープ・watcher・editor state）。watch transportはstable state/code/blocker/actionだけへ投影してhost path・raw probe例外を公開せず、session/live project-root identityは維持する。domain reload中のtransient heartbeat欠落、persistent unavailable、project-root mismatchを区別し、live editor dirty identities / `state_source` / observed Unity version / VRChat Base・Worlds・UdonSharp registered-package readiness / blockers / `suggested_next_action` を single status surface で返す。Bridge diagnostics の warning severity も引き継ぐ | #162, #155, #239, #111, #117, #186, #194 | read-only |
 
 ### editor_view
 
@@ -147,7 +147,9 @@
 | `editor_console` | editor_view | Unity Console ログを bridge-owned callback buffer から構造化取得。`since_sequence` / `since_request_id` / `phase_filter` / `classification_filter` / pagination 対応 | #94, #113, #117, #131, #239 | read-only |
 | `editor_refresh` | editor_view | `AssetDatabase.Refresh()` をトリガーし、refresh で誘発したコンパイルを観測（compile-aware）。コンパイル無し→refresh-OK、成功→compile-success、失敗→実コンパイラ診断付き compile-failure。background/non-focused deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` | #70, #72 | write |
 | `editor_recompile` | editor_view | スクリプト再コンパイルを発行し `CompilationPipeline.compilationFinished` で完了を観測（同期 / ブロッキング）。background/non-focused deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` | #54, #72, #118, #134, #203, #213, #235 | write |
-| `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行 | — | read-only |
+| `editor_run_tests` | editor_view | Editor Bridge 経由で Unity 統合テストを実行。`profile="default"`, `live_probes=false`, `run_id=""`, `timeout_sec=300` が既定で、#186 の bounded `bridge_acceptance` profile は explicit live probes と 32 桁 lowercase-hex run ID を要し、六つの case result と fixture/lease ownership を structured `data` で返す | #186 | conditional/write |
+
+`editor_run_tests` is the existing public MCP tool. No new public MCP tool is introduced for local acceptance: the controller uses its extended schema once, while same-run lease status/cleanup are private Bridge actions. The separate `--recover-run-id` CLI mode is recovery-only and still invokes those private same-run actions; it is not a public MCP tool.
 
 ### editor_geometry
 
@@ -241,12 +243,18 @@
 
 ### editor_exec
 
-`prefab_sentinel/mcp_tools_editor_exec.py`。Editor 内で C# スニペットをコンパイル・実行する。
+`prefab_sentinel/mcp_tools_editor_exec.py`。Editor 内で完全な C# compilation unit をコンパイル・実行する。
+
+`editor_run_script` と `editor_run_script_submit` の `code` は method body や statements ではなく、global namespace に `public static class PrefabSentinelTempScript` と parameterless な `public static void Run()` または `public static T Run()` を定義する完全な compilation unit でなければならない。`T` は `string`、`bool`、数値 primitive（`byte` / `sbyte` / `short` / `ushort` / `int` / `uint` / `long` / `ulong` / `float` / `double` / `decimal`）、または 1 次元の `string[]` / `bool[]` / `byte[]` / `short[]` / `int[]` / `long[]` / `float[]` / `double[]` を受理し、null return value も受理する。Bridge は method body を自動 wrap しない。最小の直接実行可能な入力は次のとおり。
+
+```csharp
+public static class PrefabSentinelTempScript { public static void Run() { } }
+```
 
 | ツール | 区分 | 簡潔説明 | 関連 issue | 種別 |
 |--------|------|----------|-----------|------|
-| `editor_run_script` | editor_exec | C# スニペットを 1 ステップでコンパイル + 実行。background/non-focused compile deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` を返し、foreground 後の再実行を促す。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #72, #74, #93, #103, #116, #127, #226, #234 | write |
-| `editor_run_script_submit` | editor_exec | 長時間スクリプト用の非同期 submit。background/non-focused compile deadline では job を保持し、poll 側の同一 `request_id` 再試行に委ねる | #72, #233 | write |
+| `editor_run_script` | editor_exec | 完全な C# compilation unit を 1 ステップでコンパイル + 実行。background/non-focused compile deadline は `EDITOR_COMPILE_DEFERRED_BACKGROUND` を返し、foreground 後の再実行を促す。`confirm` + `change_reason` 必須、`compile_timeout_ms` ∈ `[1, 120000]` | #72, #74, #93, #103, #116, #127, #201, #226, #234 | write |
+| `editor_run_script_submit` | editor_exec | 同じ完全 compilation-unit 契約を使う長時間実行向け非同期 submit。background/non-focused compile deadline では job を保持し、poll 側の同一 `request_id` 再試行に委ねる | #72, #201, #233 | write |
 | `editor_run_script_poll` | editor_exec | submit が返した 32 文字 lower-case hex identifier で poll し結果を取り出す。`cleanup_on_timeout=True` かつ background deferral confirmed の場合は `job_retained=true`, `cleanup_performed=false` | #72, #233 | read-only |
 
 ### editor_prefab_stage

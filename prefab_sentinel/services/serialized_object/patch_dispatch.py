@@ -20,6 +20,7 @@ from prefab_sentinel.services.serialized_object.asset_open_ops import (
 )
 from prefab_sentinel.services.serialized_object.patch_json_apply import (
     apply_json_target,
+    dry_run_json_target,
     propagate_dry_run_failure,
 )
 from prefab_sentinel.services.serialized_object.patch_preview import (
@@ -159,6 +160,7 @@ def dry_run_patch(
     service: SerializedObjectService,
     target: str,
     ops: list[dict[str, Any]],
+    resource_kind: str | None = None,
 ) -> ToolResponse:
     """Validate *ops* against *target* and return a preview-only envelope."""
     service.invalidate_before_cache()
@@ -172,21 +174,32 @@ def dry_run_patch(
 
     target_path = Path(str(target).strip())
     suffix = target_path.suffix.lower()
-    inferred_kind = (
-        resource_bridge.infer_bridge_resource_kind(target_path)
-        if suffix in {".mat", ".asset", ".unity"}
-        else ""
+    effective_kind = (
+        resource_kind.strip().lower()
+        if resource_kind is not None
+        else (
+            resource_bridge.infer_bridge_resource_kind(target_path)
+            if suffix in {".mat", ".asset", ".unity"}
+            else ""
+        )
     )
 
-    if inferred_kind == "scene":
+    if effective_kind == "json":
+        return dry_run_json_target(
+            target,
+            service._resolve_target_path(target),
+            ops,
+        )
+
+    if effective_kind == "scene":
         diagnostics, preview = validate_scene_ops(target=target, mode="open", ops=ops)
         if diagnostics:
             return plan_invalid(target, diagnostics, len(ops))
         return dry_run_ok(target, ops, preview)
 
-    if inferred_kind in {"asset", "material"}:
+    if effective_kind in {"asset", "material"}:
         diagnostics, preview = validate_asset_open_ops(
-            target=target, kind=inferred_kind, ops=ops
+            target=target, kind=effective_kind, ops=ops
         )
         if diagnostics:
             return plan_invalid(target, diagnostics, len(ops))
@@ -199,33 +212,44 @@ def apply_and_save(
     service: SerializedObjectService,
     target: str,
     ops: list[dict[str, Any]],
+    resource_kind: str | None = None,
 ) -> ToolResponse:
     """Validate *ops*, apply them to *target*, and persist the result."""
-    dry_run_response = dry_run_patch(service, target, ops)
+    dry_run_response = dry_run_patch(
+        service,
+        target,
+        ops,
+        resource_kind=resource_kind,
+    )
     if not dry_run_response.success:
         return propagate_dry_run_failure(target, ops, dry_run_response)
 
     target_path = service._resolve_target_path(target)
-    if target_path.suffix.lower() != ".json":
-        if resource_bridge.is_unity_bridge_target(target_path):
-            return resource_bridge.apply_with_unity_bridge(
-                service.bridge,
-                target_path=target_path,
-                ops=ops,
-            )
-        return error_response(
-            "SER_UNSUPPORTED_TARGET",
-            "Phase 1 apply backend supports .json or Unity bridge targets only.",
-            data={
-                "target": str(target_path),
-                "op_count": len(ops),
-                "applied": 0,
-                "read_only": False,
-                "executed": False,
-            },
+    effective_kind = (
+        resource_kind.strip().lower()
+        if resource_kind is not None
+        else resource_bridge.infer_resource_kind(target_path)
+    )
+    if effective_kind == "json":
+        return apply_json_target(target_path, ops)
+    if resource_bridge.is_unity_bridge_target(target_path):
+        return resource_bridge.apply_with_unity_bridge(
+            service.bridge,
+            target_path=target_path,
+            ops=ops,
+            resource_kind=effective_kind,
         )
-
-    return apply_json_target(target_path, ops)
+    return error_response(
+        "SER_UNSUPPORTED_TARGET",
+        "Phase 1 apply backend supports JSON or Unity bridge targets only.",
+        data={
+            "target": str(target_path),
+            "op_count": len(ops),
+            "applied": 0,
+            "read_only": False,
+            "executed": False,
+        },
+    )
 
 
 __all__ = [

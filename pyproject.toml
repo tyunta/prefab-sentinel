@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "prefab-sentinel"
-version = "0.9.1"
+version = "0.10.0"
 description = "Prefab Sentinel — Unity Prefab/Scene inspection and editing toolkit."
 requires-python = ">=3.11"
 readme = "README.md"
@@ -65,11 +65,19 @@ disable_error_code = ["arg-type", "index", "assignment", "var-annotated", "no-re
 only-include = ["prefab_sentinel", "tools/unity", "knowledge"]
 # Normal file selection honors exclusions before the source-path rewrite.
 # This keeps workspace-local Serena metadata out of the mapped bridge tree.
-exclude = ["**/.serena/**"]
+exclude = [
+    "**/.serena/**",
+    "/tools/unity/PrefabSentinel.Editor.Analysis.local.csproj",
+    "/tools/unity/README.md",
+]
 
 [tool.hatch.build.targets.wheel.sources]
 "tools/unity" = "prefab_sentinel/_bridge_files"
 "knowledge" = "prefab_sentinel/_knowledge_files"
+
+# Source archives retain the analysis runbook/generator, but never local inputs.
+[tool.hatch.build.targets.sdist]
+exclude = ["**/.serena/**", "/tools/unity/PrefabSentinel.Editor.Analysis.local.csproj"]
 
 # uv cache-keys: default cache invalidation only watches pyproject.toml,
 # setup.py, setup.cfg (astral-sh/uv#16196). The wheel maps
@@ -86,7 +94,7 @@ cache-keys = [
 ]
 
 [tool.bumpversion]
-current_version = "0.9.1"
+current_version = "0.10.0"
 commit = false
 tag = false
 allow_dirty = true

@@ -26,6 +26,19 @@ from prefab_sentinel.mcp_protocol import (
 )
 from prefab_sentinel.mcp_server import create_server
 
+_RUN_SCRIPT_CODE_DESCRIPTION = (
+    "Complete C# compilation unit (not a method body or statements). It must "
+    "declare `public static class PrefabSentinelTempScript` in the global "
+    "namespace with a parameterless `public static void Run()` or `public "
+    "static T Run()`. Supported T types are `string`, `bool`, numeric "
+    "primitives (`byte`, `sbyte`, `short`, `ushort`, `int`, `uint`, `long`, "
+    "`ulong`, `float`, `double`, `decimal`), or one-dimensional arrays "
+    "`string[]`, `bool[]`, `byte[]`, `short[]`, `int[]`, `long[]`, `float[]`, "
+    "`double[]`; null return values are accepted. Minimal executable example: "
+    "`public static class PrefabSentinelTempScript { public static void Run() "
+    "{ } }`"
+)
+
 
 def _context(
     method: str,
@@ -54,6 +67,36 @@ def _contract() -> ProtocolContractMiddleware:
 
 
 class TestCreateServerComposition(unittest.TestCase):
+    def test_run_script_code_schemas_pin_complete_compilation_unit(self) -> None:
+        async def scenario() -> None:
+            tools = {
+                tool.name: tool
+                for tool in await create_server().list_tools()
+                if tool.name in {
+                    "editor_run_script",
+                    "editor_run_script_submit",
+                }
+            }
+            descriptions = {
+                name: tool.input_schema["properties"]["code"].get(
+                    "description"
+                )
+                for name, tool in tools.items()
+            }
+            self.assertEqual(
+                {
+                    "editor_run_script": _RUN_SCRIPT_CODE_DESCRIPTION,
+                    "editor_run_script_submit": _RUN_SCRIPT_CODE_DESCRIPTION,
+                },
+                descriptions,
+                msg=(
+                    "Sync and async submit must publish the same complete C# "
+                    "compilation-unit contract and directly executable example."
+                ),
+            )
+
+        anyio.run(scenario)
+
     def test_public_discovery_is_tools_only_with_complete_tool_surface(self) -> None:
         fixture_path = (
             Path(__file__).parent / "fixtures" / "mcp_v1_tool_schemas.json"

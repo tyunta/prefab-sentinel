@@ -291,7 +291,7 @@ def _diagnostic_wire_rows(
         code="INSPECT_WIRING_DIAGNOSTICS",
         message="diagnostics",
         data={},
-        diagnostics=diagnostics,
+        diagnostics=_copy_diagnostics_with_default_severity(diagnostics, default_severity),
     ).to_dict()["diagnostics"]
     return cast(list[dict[str, object]], wire_diagnostics)
 
@@ -736,7 +736,62 @@ def inspect_wiring(
             cd for cd in component_summaries
             if cd.get("script_name") == normalized_filter
         ]
+        # Zero matches still have out-of-scope diagnostics. Partition before
+        # the empty-result return so detail suppression and counts agree.
+        (
+            filtered_diagnostics,
+            out_of_scope_diagnostics,
+            diagnostic_key_records,
+        ) = _partition_component_diagnostics(
+            diagnostics,
+            filtered,
+            target_path,
+            Severity.INFO,
+        )
+        filtered_default_severity = _max_diagnostic_severity(
+            filtered_diagnostics,
+            Severity.INFO,
+        )
+        out_of_scope_default_severity = _max_diagnostic_severity(
+            out_of_scope_diagnostics,
+            Severity.INFO,
+        )
+        diagnostic_counts = {
+            "filtered": _diagnostic_counts(filtered_diagnostics, filtered_default_severity),
+            "out_of_scope": _diagnostic_counts(
+                out_of_scope_diagnostics,
+                out_of_scope_default_severity,
+            ),
+        }
         if not filtered:
+            empty_filter_data: dict[str, object] = {
+                "target_path": target_path,
+                "udon_only": udon_only,
+                "read_only": True,
+                "script_filter": script_filter,
+                "summary_only": summary_only,
+                "component_count": 0,
+                "null_reference_count": 0,
+                "internal_broken_ref_count": 0,
+                "duplicate_reference_count": 0,
+                "actionability_counts": empty_actionability_counts(),
+                "diagnostic_actionability": [],
+                **_component_count_progress(0, 0).to_data(
+                    current_or_slowest_step="inspect_wiring",
+                    suggested_next_action=(
+                        "Use summary_only or script_filter when the full "
+                        "component list is too broad."
+                    ),
+                ),
+                "diagnostic_counts": diagnostic_counts,
+            }
+            if not summary_only:
+                empty_filter_data["filtered_diagnostics"] = []
+                if include_out_of_scope_diagnostics:
+                    empty_filter_data["out_of_scope_diagnostics"] = _diagnostic_wire_rows(
+                        out_of_scope_diagnostics,
+                        out_of_scope_default_severity,
+                    )
             return ToolResponse(
                 success=True,
                 severity=Severity.WARNING,
@@ -746,31 +801,8 @@ def inspect_wiring(
                     f"(normalised to {normalized_filter!r}) matched no "
                     f"components on the merged list."
                 ),
-                data={
-                    "target_path": target_path,
-                    "udon_only": udon_only,
-                    "read_only": True,
-                    "script_filter": script_filter,
-                    "summary_only": summary_only,
-                    "component_count": 0,
-                    "null_reference_count": 0,
-                    "internal_broken_ref_count": 0,
-                    "duplicate_reference_count": 0,
-                    "actionability_counts": empty_actionability_counts(),
-                    "diagnostic_actionability": [],
-                    **_component_count_progress(0, 0).to_data(
-                        current_or_slowest_step="inspect_wiring",
-                        suggested_next_action=(
-                            "Use summary_only or script_filter when the full "
-                            "component list is too broad."
-                        ),
-                    ),
-                    "diagnostic_counts": {
-                        "filtered": _diagnostic_counts([], Severity.INFO),
-                        "out_of_scope": _diagnostic_counts([], Severity.INFO),
-                    },
-                },
-                diagnostics=diagnostics,
+                data=empty_filter_data,
+                diagnostics=[],
             )
         component_summaries = filtered
         # Recompute counts against the filtered subset.
@@ -813,31 +845,6 @@ def inspect_wiring(
                 for fid in survivor_file_ids
             )
         )
-        (
-            filtered_diagnostics,
-            out_of_scope_diagnostics,
-            diagnostic_key_records,
-        ) = _partition_component_diagnostics(
-            diagnostics,
-            filtered,
-            target_path,
-            Severity.INFO,
-        )
-        filtered_default_severity = _max_diagnostic_severity(
-            filtered_diagnostics,
-            Severity.INFO,
-        )
-        out_of_scope_default_severity = _max_diagnostic_severity(
-            out_of_scope_diagnostics,
-            Severity.INFO,
-        )
-        diagnostic_counts = {
-            "filtered": _diagnostic_counts(filtered_diagnostics, filtered_default_severity),
-            "out_of_scope": _diagnostic_counts(
-                out_of_scope_diagnostics,
-                out_of_scope_default_severity,
-            ),
-        }
         diagnostic_actionability = _diagnostic_actionability_rows(
             filtered_diagnostics, component_summaries,
         )

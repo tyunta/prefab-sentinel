@@ -484,7 +484,8 @@ jobs:
 
       - name: Upload conformance evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        # Node.js 24 requires Actions Runner >= 2.327.1 (GitHub-hosted ubuntu-latest).
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mcp-2026-07-28-conformance
           path: |
@@ -517,7 +518,7 @@ jobs:
 
       - name: Upload performance report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: inspection-performance-report
           path: performance-report.json
@@ -533,7 +534,7 @@ jobs:
 
       - name: Detect C# surface changes
         id: filter
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             csharp:
@@ -559,7 +560,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup .NET (pinned by global.json)
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           global-json-file: global.json
           cache: true

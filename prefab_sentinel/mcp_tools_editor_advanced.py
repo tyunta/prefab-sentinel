@@ -7,6 +7,7 @@ from typing import Any
 
 from mcp.server import MCPServer
 
+from prefab_sentinel.bridge_response import is_bridge_response_envelope
 from prefab_sentinel.editor_bridge import send_action
 from prefab_sentinel.json_io import load_json
 from prefab_sentinel.mcp_validation import require_change_reason
@@ -187,19 +188,34 @@ def register_editor_advanced_tools(server: MCPServer) -> None:
             member_name=member_name,
         )
 
-        if not result.get("success"):
+        if not is_bridge_response_envelope(result):
+            return _reflect_error(
+                "EDITOR_REFLECT_RESPONSE_SCHEMA",
+                "editor_reflect returned an invalid response envelope.",
+            )
+        if result["success"] is False:
             return result
 
-        data = result.setdefault("data", {})
-        if isinstance(data, dict):
-            raw_json = data.pop("reflect_result_json", "")
-            if raw_json:
-                try:
-                    data.update(load_json(raw_json))
-                except json.JSONDecodeError as exc:
-                    return _reflect_error(
-                        "EDITOR_REFLECT_PARSE",
-                        f"Failed to parse reflect_result_json: {exc}",
-                    )
+        data = result["data"]
+        raw_json = data.get("reflect_result_json")
+        if not isinstance(raw_json, str):
+            return _reflect_error(
+                "EDITOR_REFLECT_RESPONSE_SCHEMA",
+                "editor_reflect returned invalid reflection data.",
+            )
+        try:
+            reflect_data = load_json(raw_json)
+        except json.JSONDecodeError as exc:
+            return _reflect_error(
+                "EDITOR_REFLECT_PARSE",
+                f"Failed to parse reflect_result_json: {exc}",
+            )
+        if not isinstance(reflect_data, dict):
+            return _reflect_error(
+                "EDITOR_REFLECT_RESPONSE_SCHEMA",
+                "editor_reflect returned invalid reflection data.",
+            )
 
+        data.pop("reflect_result_json")
+        data.update(reflect_data)
         return result

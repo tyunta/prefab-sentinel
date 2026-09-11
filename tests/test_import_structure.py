@@ -59,11 +59,12 @@ def _cross_module_private_imports(path: Path) -> list[str]:
     package_local_private_import_packages = {
         "effective_hierarchy",
         "effective_transform_inspector",
+        "services.runtime_validation",
         "unity_event_listener_inspector",
     }
     relative_path = path.relative_to(_PACKAGE_ROOT)
-    package_name = relative_path.parts[0] if len(relative_path.parts) > 1 else ""
-    same_focused_package = package_name in package_local_private_import_packages
+    package_module = ".".join(relative_path.parent.parts)
+    same_focused_package = package_module in package_local_private_import_packages
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     violations: list[str] = []
@@ -76,8 +77,8 @@ def _cross_module_private_imports(path: Path) -> list[str]:
             continue
         is_package_local = same_focused_package and (
             node.level == 1
-            or target_module == f"prefab_sentinel.{package_name}"
-            or target_module.startswith(f"prefab_sentinel.{package_name}.")
+            or target_module == f"prefab_sentinel.{package_module}"
+            or target_module.startswith(f"prefab_sentinel.{package_module}.")
         )
         for alias in node.names:
             name = alias.name

@@ -22,8 +22,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from prefab_sentinel.contracts import Severity
+from prefab_sentinel.contracts import Diagnostic, Severity
 from prefab_sentinel.orchestrator_wiring import (
+    _diagnostic_counts,
+    _diagnostic_wire_rows,
     _normalize_script_filter,
     inspect_wiring,
 )
@@ -47,7 +49,9 @@ def _write_meta(path: Path, guid: str) -> None:
     path.write_text(f"fileFormatVersion: 2\nguid: {guid}\n", encoding="utf-8")
 
 
-def _build_three_class_fixture(root: Path) -> Path:
+def _build_three_class_fixture(
+    root: Path, *, baz_fields: dict[str, str] | None = None,
+) -> Path:
     """Build a Base.prefab with one MonoBehaviour per script GUID
     (FooBehaviour / BarBehaviour / BazBehaviour) and matching .cs +
     .cs.meta files under Assets/Scripts/. The .cs files are empty
@@ -78,7 +82,7 @@ def _build_three_class_fixture(root: Path) -> Path:
             guid=_BAR_SCRIPT_GUID,
             fields={"targetRef": "{fileID: 0}"},
         )
-        + make_monobehaviour("50", "10", guid=_BAZ_SCRIPT_GUID)
+        + make_monobehaviour("50", "10", guid=_BAZ_SCRIPT_GUID, fields=baz_fields)
     )
     base_path = assets / "Base.prefab"
     base_path.write_text(base_text, encoding="utf-8")
@@ -323,6 +327,37 @@ class FilterNormalizerTests(unittest.TestCase):
             "AvatarSync",
             _normalize_script_filter("AvatarSync"),
         )
+
+
+class DiagnosticWireRowsTests(unittest.TestCase):
+    def test_mixed_severities_preserve_explicit_values_without_mutating_sources(self) -> None:
+        diagnostics = [
+            Diagnostic("Assets/Base.prefab", "", "Null reference: Root.targetRef", "null"),
+            Diagnostic("Assets/Base.prefab", "", "Internal fileID not found: Root.missingRef -> fileID:999", "missing"),
+            Diagnostic("Assets/Base.prefab", "", "Null reference: Root.optionalRef", "optional", "info"),
+            Diagnostic("Assets/Base.prefab", "", "Internal fileID not found: Root.criticalRef -> fileID:998", "critical", "critical"),
+            Diagnostic("Assets/Base.prefab", "", "unclassified_wiring_diagnostic", "other"),
+        ]
+
+        rows = _diagnostic_wire_rows(diagnostics, Severity.ERROR)
+        counts = _diagnostic_counts(diagnostics, Severity.ERROR)
+
+        self.assertEqual(
+            ["warning", "error", "info", "critical", "error"],
+            [row["severity"] for row in rows],
+        )
+        self.assertEqual(
+            {"total": 5, "info": 1, "warning": 1, "error": 2, "critical": 1},
+            counts,
+        )
+        self.assertEqual(
+            counts,
+            {"total": len(rows)} | {
+                level: sum(row["severity"] == level for row in rows)
+                for level in ("info", "warning", "error", "critical")
+            },
+        )
+        self.assertEqual([None, None, "info", "critical", None], [diag.severity for diag in diagnostics])
 
 
 class InspectWiringFilterAndSummaryTests(unittest.TestCase):
@@ -1002,6 +1037,36 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
             ),
         )
 
+    def test_clean_filter_mixed_out_of_scope_wire_severities_match_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_three_class_fixture(root, baz_fields={"missingRef": "{fileID: 999}"})
+            wire = self._run(
+                root,
+                base,
+                script_filter="FooBehaviour",
+                include_out_of_scope_diagnostics=True,
+            ).to_dict()
+
+        self.assertEqual((True, "info", []), (wire["success"], wire["severity"], wire["diagnostics"]))
+        data = wire["data"]
+        self.assertEqual(1, data["component_count"])
+        self.assertEqual([], data["filtered_diagnostics"])
+        self.assertEqual(
+            {
+                "filtered": {"total": 0, "info": 0, "warning": 0, "error": 0, "critical": 0},
+                "out_of_scope": {"total": 2, "info": 0, "warning": 1, "error": 1, "critical": 0},
+            },
+            data["diagnostic_counts"],
+        )
+        self.assertEqual(
+            [
+                ("error", "Internal fileID not found: Root.missingRef -> fileID:999"),
+                ("warning", "Null reference: Root.targetRef"),
+            ],
+            sorted((row["severity"], row["code"]) for row in data["out_of_scope_diagnostics"]),
+        )
+
     def test_unfiltered_opt_in_does_not_create_out_of_scope_partition(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
@@ -1245,7 +1310,7 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
         self.assertEqual("INSPECT_WIRING_EMPTY_FILTER_RESULT", resp.code)
         self.assertIn("NonexistentBehaviour", resp.message)
         self.assertEqual(
-            (0, 0, 0),
+            (0, 0, 1),
             (
                 resp.data["component_count"],
                 resp.data["diagnostic_counts"]["filtered"]["total"],
@@ -1266,6 +1331,47 @@ class InspectWiringFilterAndSummaryTests(unittest.TestCase):
             ],
             resp.data["progress_summary"],
         )
+
+    def test_no_match_filter_partitions_diagnostics_before_returning(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            base = _build_mixed_severity_fixture(root)
+            for summary_only in (False, True):
+                for include_details in (False, True):
+                    with self.subTest(summary_only=summary_only, include_details=include_details):
+                        resp = self._run(
+                            root, base, script_filter="NonexistentBehaviour",
+                            summary_only=summary_only,
+                            include_out_of_scope_diagnostics=include_details,
+                        )
+                        self.assertTrue(resp.success)
+                        self.assertEqual("INSPECT_WIRING_EMPTY_FILTER_RESULT", resp.code)
+                        self.assertEqual(Severity.WARNING, resp.severity)
+                        self.assertEqual(0, resp.data["component_count"])
+                        self.assertEqual([], resp.diagnostics)
+                        self.assertEqual([], resp.data["diagnostic_actionability"])
+                        self.assertEqual(
+                            {
+                                "filtered": {"total": 0, "info": 0, "warning": 0, "error": 0, "critical": 0},
+                                "out_of_scope": {"total": 2, "info": 0, "warning": 1, "error": 1, "critical": 0},
+                            },
+                            resp.data["diagnostic_counts"],
+                        )
+                        if summary_only:
+                            self.assertNotIn("components", resp.data)
+                            self.assertNotIn("filtered_diagnostics", resp.data)
+                        else:
+                            self.assertEqual([], resp.data["filtered_diagnostics"])
+                        if include_details and not summary_only:
+                            self.assertEqual(
+                                [
+                                    ("error", "Internal fileID not found: Root.missingRef -> fileID:999"),
+                                    ("warning", "Null reference: Root.targetRef"),
+                                ],
+                                sorted((row["severity"], row["code"]) for row in resp.data["out_of_scope_diagnostics"]),
+                            )
+                        else:
+                            self.assertNotIn("out_of_scope_diagnostics", resp.data)
 
     def test_summary_mode_suppresses_slice_and_pagination(self) -> None:
         """Issue #227 — summary mode keeps the response under the token

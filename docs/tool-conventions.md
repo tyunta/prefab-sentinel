@@ -28,6 +28,12 @@ modern `2026-07-28` の各 request は `_meta["io.modelcontextprotocol/protocolV
 - SDK の引数 schema 検証や tool handler の実行自体が失敗した場合は `CallToolResult.isError=true` とする。
 - protocol version / request metadata / request-method allowlist の違反は tool result に包まず、top-level JSON-RPC error とする。numeric code と HTTP status の正本は [api-reference.md「エラーコード規約」](./api-reference.md#エラーコード規約)。
 
+editor-control transport は file read failure を `EDITOR_BRIDGE_RESPONSE_READ`、共通エンベロープまたは file-IPC `protocol_version=2` 違反を `EDITOR_BRIDGE_RESPONSE_SCHEMA` へ写像する。runtime file transport は read failure を `RUN_EDITOR_BRIDGE_RESPONSE` へ写像し、runtime parser は protocol version、共通エンベロープ、operation 固有 payload の違反を `RUN_PROTOCOL_ERROR` にする。patch consumer は同じ file-IPC version 2を要求するが、`plan_version=2` は別の patch plan schema contractとして検証する。editor-control consumer は transport が証明した共通 shape の後で operation 固有 payload を証明する。共通 shape が正しい `success=false` は consumer が success や generic schema failure へ丸めず、その操作の failure semantics のまま返す。
+
+`get_project_status` の watch identity は private observation から public projection への一方向境界である。host は configured directory の marker と Unity が `Library/PrefabSentinel/bridge-status-v1.json` に出す status を照合するが、public MCP result は一致/不一致の根拠を返さない。fresh mismatch は `connection_state="misconfigured"`、`EDITOR_BRIDGE_WATCH_DIR_MISMATCH`、`watch_dir` blocker、固定 suggested action に射影する。
+
+各 registered MCP session は一つの status tracker を所有する。fresh match / mismatch は last-fresh 時刻を更新し outage log を再armする。last-fresh から 5000 ms 以内（境界を含む）の status file 欠落だけを `EDITOR_BRIDGE_STATUS_TRANSIENT` / `unavailable` / blocker 0件へ射影し、live request と private ERROR を抑止する。初回または境界超過後の欠落、stale、不正、読取不能は `EDITOR_BRIDGE_STATUS_UNAVAILABLE` / `bridge_connection` blocker 1件へ射影し、outage ごとに private ERROR を1回記録する。`activate_project` 成功時だけ tracker を reset する。marker IDs、watch paths、timestamps、private status content、raw exceptions are not public。
+
 ## 1. 住所スキーム
 
 MCP ツールが対象を指す住所は 5 種類。大きく **project 側（asset ファイルを指す）** と **scene 側（asset 内 / live editor のオブジェクトを指す）** に分かれる。引数名はこの区別を必ず表に出す（§2.1）。
@@ -144,8 +150,11 @@ patch v2 スキーマの op 内でコンポーネントを指す文字列フォ�
 | 監査側 | `delete_asset` / `delete_assets` / `editor_create_generated_asset` / `editor_move_asset` / `editor_create_animation_clip` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` / `editor_close_prefab`(save=True) | (c) |
 | 監査側 | offline write（`patch_apply` / `set_property` / `add_component` 等） | (c) disk YAML 書き込み |
 | 非監査側 | `editor_set_property` / `editor_set_blend_shape` / `editor_batch_set_property` / `editor_batch_set_blend_shape` / `editor_apply_animation_clip` 等 | Undo 可能な scene / live 変更 |
-| 条件付き監査 | `validate_runtime(profile="clientsim")` | ClientSim は Play Mode / dirty scene state に触れうるため明示 profile + audit pair を要求する。`compile_only` / `editor_console_only` は read-only profile。 |
+| 条件付き監査 | `validate_runtime(profile="compile_only"|"clientsim")` | force UdonSharp compile は write-class。exact audit tuple and report-path contract は [api-reference.md](./api-reference.md#audited-runtime-validation-response-issue-167) を参照。 |
+| 非監査側 | `validate_runtime(profile="editor_console_only")` | bridge-owned console を読む read-only profile。exact profile contract は [api-reference.md](./api-reference.md#audited-runtime-validation-response-issue-167) を参照。 |
 
 `delete_asset` / `delete_assets` は dry-run が既定で、確定適用時だけ `confirm=True` + 非空 `change_reason` を要求する。適用経路は Unity `AssetDatabase` を持つ Editor Bridge action に限定し、Bridge / AssetDatabase が使えない場合は typed error を返して filesystem delete へ迂回しない。削除後に broken reference が増えた場合も、tool は可否判断をせず `broken_reference_delta` として報告する。
 
 `editor_create_generated_asset` / `editor_move_asset` は dry-run が AssetDatabase state を読むため Bridge に到達するが、audit/report 引数は検証しない。確定適用時だけ `confirm=True` + 非空 `change_reason` + `out_report` を要求し、final response と同一 JSON を report に書く。`copy_asset` / `rename_asset` は offline file/YAML 操作のまま、`delete_assets` は削除専用の AssetDatabase-backed patch tool のままで、issue #116 の create/move 操作へ責務を統合しない。
+
+`validate_runtime` は唯一の runtime action であり、`patch_apply` に runtime shortcut はない。profile の read/write 分類と audit authority は上表に従う。入力既定値、policy enum、warning semantics、report schema、Scene 条件、実行順序は [api-reference.md](./api-reference.md#audited-runtime-validation-response-issue-167) と [execution-reference.md](./execution-reference.md#unity-bridge--runtime) を正本とする。

@@ -1,7 +1,7 @@
 """``RuntimeValidationService`` — public class facade.
 
-Public methods (``compile_udonsharp``, ``run_clientsim``,
-``collect_unity_console``, ``classify_errors``, ``assert_no_critical_errors``)
+Public methods (``execute_write_profile``, ``collect_unity_console``,
+``classify_errors``, ``assert_no_critical_errors``)
 delegate to pure-function helpers in sibling modules; this file owns the
 project-root resolution and the relative-path helper passed down to the
 helpers.  All Unity-bound dispatch flows through the resident Editor
@@ -42,68 +42,57 @@ class RuntimeValidationService:
     def _invoke_unity_runtime(
         self,
         *,
-        action: str,
         target_root: Path,
-        scene_path: str | None = None,
-        profile: str | None = None,
-        confirm: bool = False,
-        change_reason: str | None = None,
-        allow_dirty_before: bool = False,
+        scene_path: str,
+        profile: str,
+        confirm: bool,
+        change_reason: str,
+        generated_asset_policy: str,
+        allow_dirty_program_assets_before_compile: bool,
+        allow_dirty_scenes_before_compile: bool,
     ) -> ToolResponse:
         return invoke_via_editor_bridge(
-            action=action,
             target_root=target_root,
             scene_path=scene_path,
             profile=profile,
             relative_fn=self._relative,
             confirm=confirm,
             change_reason=change_reason,
-            allow_dirty_before=allow_dirty_before,
+            generated_asset_policy=generated_asset_policy,
+            allow_dirty_program_assets_before_compile=(
+                allow_dirty_program_assets_before_compile
+            ),
+            allow_dirty_scenes_before_compile=allow_dirty_scenes_before_compile,
         )
 
 
 
 
 
-    def compile_udonsharp(self, project_root: str | None = None) -> ToolResponse:
-        """Trigger an UdonSharp compilation via the resident Editor Bridge.
-
-        Args:
-            project_root: Unity project root path. Uses the configured
-                default when ``None``.
-
-        Returns:
-            ``ToolResponse`` with the compile result from the Unity
-            runtime; ``RUN_COMPILE_SKIPPED`` when *target_root* lacks an
-            ``Assets/`` directory.
-        """
-        target_root = (
-            default_runtime_root(self.project_root)
-            if project_root is None
-            else resolve_scope_path(project_root, self.project_root)
-        )
+    def execute_write_profile(
+        self,
+        *,
+        scene_path: str,
+        profile: str,
+        confirm: bool,
+        change_reason: str,
+        generated_asset_policy: str,
+        allow_dirty_program_assets_before_compile: bool,
+        allow_dirty_scenes_before_compile: bool,
+    ) -> ToolResponse:
+        """Execute one audited write-class runtime profile through one Bridge action."""
+        target_root = default_runtime_root(self.project_root)
         if not (target_root / "Assets").exists():
             return skip_response(
                 code="RUN_COMPILE_SKIPPED",
-                message="compile_udonsharp skipped because project root does not contain Assets.",
+                message=(
+                    "validate_runtime skipped because project root does not contain Assets."
+                ),
                 data={"project_root": str(target_root)},
             )
-        return self._invoke_unity_runtime(
-            action="compile_udonsharp",
-            target_root=target_root,
-        )
 
-    def run_clientsim(
-        self,
-        scene_path: str,
-        profile: str,
-        confirm: bool = False,
-        change_reason: str | None = None,
-        allow_dirty_before: bool = False,
-    ) -> ToolResponse:
-        target_root = default_runtime_root(self.project_root)
-        resolved_root = Path(target_root).resolve()
-        scene = resolve_scope_path(scene_path, target_root)
+        resolved_root = target_root.resolve()
+        scene = resolve_scope_path(scene_path, target_root).resolve()
         rejection_data = {
             "scene_path": scene_path,
             "profile": profile,
@@ -128,32 +117,32 @@ class RuntimeValidationService:
                 "Runtime validation requires a .unity scene path.",
                 data=rejection_data,
             )
-        if profile != "clientsim":
+        if profile not in ("compile_only", "clientsim"):
             return error_response(
                 "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED",
-                "ClientSim execution requires the clientsim runtime validation profile.",
+                "Write execution requires compile_only or clientsim.",
                 data=rejection_data,
             )
-        if not confirm or change_reason is None or not change_reason.strip():
-            return error_response(
-                "CLIENTSIM_CONFIRM_REQUIRED",
-                "ClientSim validation requires explicit audit confirmation and a non-empty change reason.",
-                data=rejection_data,
-            )
+
+        response = self._invoke_unity_runtime(
+            target_root=target_root,
+            scene_path=self._relative(scene),
+            profile=profile,
+            confirm=confirm,
+            change_reason=change_reason,
+            generated_asset_policy=generated_asset_policy,
+            allow_dirty_program_assets_before_compile=(
+                allow_dirty_program_assets_before_compile
+            ),
+            allow_dirty_scenes_before_compile=allow_dirty_scenes_before_compile,
+        )
+        if profile != "clientsim":
+            return response
 
         from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
             with_clientsim_side_effect_diagnostics,
         )
 
-        response = self._invoke_unity_runtime(
-            action="run_clientsim",
-            target_root=target_root,
-            scene_path=self._relative(scene),
-            profile=profile,
-            confirm=confirm,
-            change_reason=change_reason.strip(),
-            allow_dirty_before=allow_dirty_before,
-        )
         return with_clientsim_side_effect_diagnostics(response)
 
     def collect_unity_console(
@@ -188,6 +177,8 @@ class RuntimeValidationService:
                     data={
                         "log_file": log_file,
                         "runtime_root": str(resolved_root),
+                        "console_authority": "unity_log",
+                        "evidence_available": False,
                         "read_only": True,
                         "executed": False,
                     },
@@ -199,12 +190,14 @@ class RuntimeValidationService:
         if not log_path.exists():
             return success_response(
                 "RUN_LOG_MISSING",
-                "Unity log file was not found; classification uses empty log lines.",
+                "Unity log file was not found; Console evidence is unavailable.",
                 severity=Severity.WARNING,
                 data={
                     "log_path": str(log_path),
                     "line_count": 0,
                     "log_lines": [],
+                    "console_authority": "unity_log",
+                    "evidence_available": False,
                     "since_timestamp": since_timestamp,
                     "read_only": True,
                 },
@@ -217,12 +210,14 @@ class RuntimeValidationService:
         except UnicodeDecodeError:
             return success_response(
                 "RUN_LOG_DECODE_WARN",
-                "Unity log file could not be decoded as UTF-8; returning empty log lines.",
+                "Unity log file could not be decoded as UTF-8; Console evidence is unavailable.",
                 severity=Severity.WARNING,
                 data={
                     "log_path": self._relative(log_path),
                     "line_count": 0,
                     "log_lines": [],
+                    "console_authority": "unity_log",
+                    "evidence_available": False,
                     "since_timestamp": since_timestamp,
                     "read_only": True,
                 },
@@ -237,6 +232,8 @@ class RuntimeValidationService:
                 "log_path": self._relative(log_path),
                 "line_count": len(lines),
                 "log_lines": lines,
+                "console_authority": "unity_log",
+                "evidence_available": True,
                 "since_timestamp": since_timestamp,
                 "read_only": True,
             },

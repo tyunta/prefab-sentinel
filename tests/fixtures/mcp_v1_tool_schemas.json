@@ -1712,6 +1712,7 @@
             "type": "string"
           },
           "code": {
+            "description": "Complete C# compilation unit (not a method body or statements). It must declare `public static class PrefabSentinelTempScript` in the global namespace with a parameterless `public static void Run()` or `public static T Run()`. Supported T types are `string`, `bool`, numeric primitives (`byte`, `sbyte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `float`, `double`, `decimal`), or one-dimensional arrays `string[]`, `bool[]`, `byte[]`, `short[]`, `int[]`, `long[]`, `float[]`, `double[]`; null return values are accepted. Minimal executable example: `public static class PrefabSentinelTempScript { public static void Run() { } }`",
             "title": "Code",
             "type": "string"
           },
@@ -1774,6 +1775,7 @@
             "type": "string"
           },
           "code": {
+            "description": "Complete C# compilation unit (not a method body or statements). It must declare `public static class PrefabSentinelTempScript` in the global namespace with a parameterless `public static void Run()` or `public static T Run()`. Supported T types are `string`, `bool`, numeric primitives (`byte`, `sbyte`, `short`, `ushort`, `int`, `uint`, `long`, `ulong`, `float`, `double`, `decimal`), or one-dimensional arrays `string[]`, `bool[]`, `byte[]`, `short[]`, `int[]`, `long[]`, `float[]`, `double[]`; null return values are accepted. Minimal executable example: `public static class PrefabSentinelTempScript { public static void Run() { } }`",
             "title": "Code",
             "type": "string"
           },
@@ -1804,6 +1806,21 @@
     {
       "inputSchema": {
         "properties": {
+          "live_probes": {
+            "default": false,
+            "title": "Live Probes",
+            "type": "boolean"
+          },
+          "profile": {
+            "default": "default",
+            "title": "Profile",
+            "type": "string"
+          },
+          "run_id": {
+            "default": "",
+            "title": "Run Id",
+            "type": "string"
+          },
           "timeout_sec": {
             "default": 300,
             "title": "Timeout Sec",
@@ -3295,57 +3312,6 @@
           "plan": {
             "title": "Plan"
           },
-          "runtime_allow_warnings": {
-            "default": false,
-            "title": "Runtime Allow Warnings",
-            "type": "boolean"
-          },
-          "runtime_log_file": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Runtime Log File"
-          },
-          "runtime_max_diagnostics": {
-            "default": 200,
-            "title": "Runtime Max Diagnostics",
-            "type": "integer"
-          },
-          "runtime_profile": {
-            "default": "default",
-            "title": "Runtime Profile",
-            "type": "string"
-          },
-          "runtime_scene": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Runtime Scene"
-          },
-          "runtime_since_timestamp": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Runtime Since Timestamp"
-          },
           "scope": {
             "anyOf": [
               {
@@ -3917,9 +3883,14 @@
     {
       "inputSchema": {
         "properties": {
-          "allow_dirty_before_clientsim": {
+          "allow_dirty_program_assets_before_compile": {
             "default": false,
-            "title": "Allow Dirty Before Clientsim",
+            "title": "Allow Dirty Program Assets Before Compile",
+            "type": "boolean"
+          },
+          "allow_dirty_scenes_before_compile": {
+            "default": false,
+            "title": "Allow Dirty Scenes Before Compile",
             "type": "boolean"
           },
           "allow_warnings": {
@@ -3948,6 +3919,16 @@
             "title": "Confirm",
             "type": "boolean"
           },
+          "console_authority": {
+            "default": "unity_log",
+            "title": "Console Authority",
+            "type": "string"
+          },
+          "generated_asset_policy": {
+            "default": "deny",
+            "title": "Generated Asset Policy",
+            "type": "string"
+          },
           "log_file": {
             "anyOf": [
               {
@@ -3965,10 +3946,29 @@
             "title": "Max Diagnostics",
             "type": "integer"
           },
+          "out_report": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Out Report"
+          },
           "profile": {
-            "default": "compile_only",
-            "title": "Profile",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
           },
           "since_timestamp": {
             "anyOf": [

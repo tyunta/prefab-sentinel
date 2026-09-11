@@ -44,3 +44,6 @@ obj/
 *.user
 *.suo
 .vs/
+
+# Generated Unity analysis metadata contains machine-local paths.
+/tools/unity/PrefabSentinel.Editor.Analysis.local.csproj

@@ -3,16 +3,29 @@
 from __future__ import annotations
 
 import logging
+import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
 
+import prefab_sentinel.bridge_deploy as bridge_deploy
+from prefab_sentinel.bridge_constants import (
+    BRIDGE_INSTANCE_ID_ENV,
+    BRIDGE_WATCH_DIR_ENV,
+)
+from prefab_sentinel.bridge_watch_identity import (
+    WatchIdentityObservation,
+    WatchIdentityTracker,
+)
 from prefab_sentinel.contracts import Severity, max_severity
 from prefab_sentinel.editor_bridge import (
     bridge_status,
     get_last_bridge_version,
     send_action,
+    send_private_deploy_action,
 )
 from prefab_sentinel.editor_status_blockers import (
     BRIDGE_CONNECTION,
@@ -94,29 +107,47 @@ def _bridge_diagnostic_to_session_wire(
     )
 
     raw_code = diagnostic.get("code")
-    code = raw_code if isinstance(raw_code, str) and raw_code else "BRIDGE_DIAGNOSTIC"
-    raw_message = diagnostic.get("message")
-    raw_detail = diagnostic.get("detail")
-    message = (
-        raw_message
-        if isinstance(raw_message, str) and raw_message
-        else raw_detail
-        if isinstance(raw_detail, str) and raw_detail
-        else code
+    code = (
+        raw_code
+        if raw_code == "EDITOR_STATE_ENUMERATION_LIMITED"
+        else "BRIDGE_DIAGNOSTIC"
     )
-    data = {
-        key: diagnostic[key]
-        for key in (
-            "path",
-            "location",
-            "evidence",
-            "blocker_class",
-            "state_source",
-            "suggested_next_action",
-        )
-        if key in diagnostic and diagnostic[key] not in (None, "")
+    logger.warning(
+        (
+            "Private Bridge status diagnostic %s: "
+            "message=%s detail=%s path=%s evidence=%s"
+        ),
+        raw_code,
+        diagnostic.get("message"),
+        diagnostic.get("detail"),
+        diagnostic.get("path"),
+        diagnostic.get("evidence"),
+    )
+
+    stable_messages = {
+        "EDITOR_STATE_ENUMERATION_LIMITED": (
+            "Unity Editor state enumeration was limited."
+        ),
+        "BRIDGE_DIAGNOSTIC": "BRIDGE_DIAGNOSTIC",
     }
-    return _build_session_diagnostic(code, message, severity=severity, data=data)
+    data: dict[str, Any] = {}
+    raw_location = diagnostic.get("location")
+    if raw_location in {
+        "active_scene",
+        "prefab_stage",
+        "open_scenes",
+        "dirty_scene_paths",
+        "dirty_prefab_paths",
+        "dirty_material_paths",
+        "dirty_asset_paths",
+    }:
+        data["location"] = raw_location
+    return _build_session_diagnostic(
+        code,
+        stable_messages[code],
+        severity=severity,
+        data=data,
+    )
 
 
 def _bridge_diagnostics_to_session_wire(
@@ -146,6 +177,24 @@ def _context_string(context: dict[str, Any], key: str) -> str | None:
     return stripped or None
 
 
+def _observe_current_bridge_version(project_root: Path) -> str | None:
+    expected_instance_id = os.environ.get(BRIDGE_INSTANCE_ID_ENV, "").strip()
+    if not expected_instance_id:
+        return None
+
+    response = send_action(
+        action="get_editor_state",
+        expected_project_root=str(project_root),
+    )
+    if response.get("success") is not True:
+        return None
+
+    context = _operator_context(response)
+    if _context_string(context, "bridge_instance_id") != expected_instance_id:
+        return None
+    return _context_string(context, "bridge_version")
+
+
 def _project_root_identity(root: str) -> str:
     return str(Path(to_wsl_path(root)).expanduser().resolve())
 
@@ -161,30 +210,118 @@ def _project_roots_consistent(
     )
 
 
-def _copy_editor_state_summary(status: dict[str, Any], editor_state: object) -> None:
+def _copy_editor_state_summary(
+    status: dict[str, Any],
+    editor_state: object,
+) -> dict[str, Any] | None:
     if not isinstance(editor_state, dict):
-        return
+        return None
+
+    def is_public_asset_path(value: object) -> bool:
+        if not isinstance(value, str):
+            return False
+        if not value:
+            return True
+        if "\\" in value or not value.startswith("Assets/"):
+            return False
+        parts = value.split("/")
+        return (
+            len(parts) > 1
+            and parts[0] == "Assets"
+            and all(part not in {"", ".", ".."} for part in parts[1:])
+        )
+
+    projected: dict[str, Any] = {}
     for key in (
         "state_source",
+        "unity_version",
+        "active_stage_kind",
+        "active_scene_name",
+        "prefab_stage_root_name",
+    ):
+        value = editor_state.get(key)
+        if isinstance(value, str):
+            projected[key] = value
+
+    raw_packages = editor_state.get("required_packages")
+    if isinstance(raw_packages, list):
+        package_names = (
+            "com.vrchat.base",
+            "com.vrchat.worlds",
+            "udonsharp",
+        )
+        packages_by_name = {
+            item.get("name"): item
+            for item in raw_packages
+            if isinstance(item, dict) and item.get("name") in package_names
+        }
+        projected["required_packages"] = [
+            {
+                "name": name,
+                "ready": item.get("ready") is True,
+                "version": (
+                    item.get("version")
+                    if isinstance(item.get("version"), str)
+                    else ""
+                ),
+            }
+            for name in package_names
+            if isinstance((item := packages_by_name.get(name)), dict)
+        ]
+
+    for key in (
         "is_playing",
         "is_will_change_playmode",
         "is_compiling",
         "is_building_player",
-        "active_stage_kind",
-        "active_scene_path",
-        "active_scene_name",
-        "prefab_stage_asset_path",
-        "prefab_stage_root_name",
         "prefab_stage_is_dirty",
-        "open_scenes",
         "has_unsaved_changes",
+    ):
+        value = editor_state.get(key)
+        if isinstance(value, bool):
+            projected[key] = value
+
+    for key in (
+        "active_scene_path",
+        "prefab_stage_asset_path",
+    ):
+        value = editor_state.get(key)
+        if is_public_asset_path(value):
+            projected[key] = value
+
+    for key in (
         "dirty_scene_paths",
         "dirty_prefab_paths",
         "dirty_material_paths",
         "dirty_asset_paths",
     ):
-        if key in editor_state:
-            status[key] = editor_state[key]
+        value = editor_state.get(key)
+        if isinstance(value, list):
+            projected[key] = [
+                item for item in value if is_public_asset_path(item)
+            ]
+
+    raw_open_scenes = editor_state.get("open_scenes")
+    if isinstance(raw_open_scenes, list):
+        open_scenes: list[dict[str, Any]] = []
+        for raw_scene in raw_open_scenes:
+            if not isinstance(raw_scene, dict):
+                continue
+            path = raw_scene.get("path")
+            if not is_public_asset_path(path):
+                continue
+            scene: dict[str, Any] = {"path": path}
+            name = raw_scene.get("name")
+            if isinstance(name, str):
+                scene["name"] = name
+            is_dirty = raw_scene.get("is_dirty")
+            if isinstance(is_dirty, bool):
+                scene["is_dirty"] = is_dirty
+            open_scenes.append(scene)
+        projected["open_scenes"] = open_scenes
+
+    status.update(projected)
+    return projected
 
 
 def _copy_operator_context(status: dict[str, Any], context: dict[str, Any]) -> None:
@@ -232,8 +369,47 @@ def _append_project_root_mismatch_diagnostic(
     )
 
 
+def _watch_identity_bridge_projection(
+    observation: WatchIdentityObservation,
+) -> dict[str, Any] | None:
+    if observation.state == "match":
+        return None
+    if observation.state == "mismatch":
+        return {
+            "connected": False,
+            "connection_state": "misconfigured",
+            "code": "EDITOR_BRIDGE_WATCH_DIR_MISMATCH",
+            "blocker_class": "watch_dir",
+            "suggested_next_action": (
+                "Use the same watch directory for Codex and the Unity Editor Bridge."
+            ),
+        }
+
+    transient = observation.reason == "status_transient"
+    return {
+        "connected": False,
+        "connection_state": "unavailable",
+        "code": (
+            "EDITOR_BRIDGE_STATUS_TRANSIENT"
+            if transient
+            else "EDITOR_BRIDGE_STATUS_UNAVAILABLE"
+        ),
+        "blocker_class": None if transient else BRIDGE_CONNECTION,
+        "suggested_next_action": (
+            None
+            if transient
+            else (
+                "Confirm Unity is running and the PrefabSentinel Editor "
+                "Bridge watcher is active."
+            )
+        ),
+    }
+
+
 def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
     """Register session management tools on *server*."""
+
+    watch_identity_tracker = WatchIdentityTracker()
 
     @server.tool()
     async def activate_project(
@@ -267,6 +443,8 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                 "data": {},
                 "diagnostics": [],
             }
+
+        watch_identity_tracker.reset()
         diagnostics: list[dict[str, Any]] = [
             _build_session_diagnostic(
                 "SESSION_SCOPE_DEFAULT_NOTE",
@@ -299,21 +477,7 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
     def deploy_bridge(
         target_dir: str = "",
     ) -> dict[str, Any]:
-        """Deploy or update Bridge C# files to the Unity project.
-
-        Copies Bridge C# and .asmdef files to the target directory. Source
-        files are read from _bridge_files/ (wheel install) or tools/unity/
-        (source tree). Cleans up old Bridge files from the parent directory
-        to prevent CS0101 duplicate definition errors.
-        Triggers editor_refresh after copying to reload assets.
-
-        Args:
-            target_dir: Target directory in Unity project.
-                Default: {project_root}/Assets/Editor/PrefabSentinel/
-        """
-        import shutil
-        from pathlib import Path as _Path
-
+        """Deploy a complete Bridge bundle through the safe transaction path."""
         project_root = session.project_root
         if project_root is None:
             return {
@@ -325,126 +489,107 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                 "diagnostics": [],
             }
 
-        if not target_dir:
-            target_dir = str(project_root / "Assets" / "Editor" / "PrefabSentinel")
-
-        target_path = _Path(target_dir).resolve()
-
-        project_resolved = project_root.resolve()
-        if not target_path.is_relative_to(project_resolved):
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "DEPLOY_OUTSIDE_PROJECT",
-                "message": f"target_dir must be within the project: {project_resolved}",
-                "data": {},
-                "diagnostics": [],
-            }
-
-        target_path.mkdir(parents=True, exist_ok=True)
-
-        plugin_tools = _Path(__file__).parent / "_bridge_files"
+        target_path = (
+            Path(to_wsl_path(target_dir))
+            if target_dir
+            else project_root / bridge_deploy.DEFAULT_TARGET
+        )
+        plugin_tools = Path(__file__).parent / "_bridge_files"
         if not plugin_tools.is_dir():
-            plugin_tools = _Path(__file__).parent.parent / "tools" / "unity"
-        if not plugin_tools.is_dir():
-            return {
-                "success": False,
-                "severity": "error",
-                "code": "DEPLOY_SOURCE_NOT_FOUND",
-                "message": "Bridge source directory not found. "
-                "Ensure tools/unity/ exists (source) or package includes "
-                "_bridge_files/ (wheel install).",
-                "data": {},
-                "diagnostics": [],
-            }
+            plugin_tools = Path(__file__).parent.parent / "tools" / "unity"
 
-        diagnostics: list[dict[str, Any]] = []
-
-        removed_old_files: list[str] = []
-        parent_dir = target_path.parent
-        if parent_dir.is_dir():
-            for old_file in sorted(parent_dir.glob("PrefabSentinel.*.cs")):
-                old_file.unlink()
-                removed_old_files.append(old_file.name)
-                meta_file = _Path(str(old_file) + ".meta")
-                if meta_file.exists():
-                    meta_file.unlink()
-                    removed_old_files.append(meta_file.name)
-
-        if removed_old_files:
-            diagnostics.append(
-                _build_session_diagnostic(
-                    "DEPLOY_REMOVED_OLD_BRIDGE_FILES",
-                    (
-                        f"Removed {len(removed_old_files)} old Bridge file(s) from "
-                        f"{parent_dir} to prevent CS0101 duplicate definitions"
-                    ),
-                    severity=Severity.WARNING,
-                    data={
-                        "removed_count": len(removed_old_files),
-                        "parent_dir": str(parent_dir),
-                    },
-                )
-            )
-
-        old_version = session.detect_bridge_version()
-
-        removed_stale_files: list[str] = []
-        for stale in sorted(target_path.iterdir()):
-            if stale.is_file():
-                stale.unlink()
-                removed_stale_files.append(stale.name)
-
-        if removed_stale_files:
-            diagnostics.append(
-                _build_session_diagnostic(
-                    "DEPLOY_CLEARED_STALE_FILES",
-                    (
-                        f"Cleared {len(removed_stale_files)} file(s) from "
-                        f"{target_dir} before redeploy"
-                    ),
-                    severity=Severity.INFO,
-                    data={
-                        "removed_count": len(removed_stale_files),
-                        "target_dir": str(target_dir),
-                    },
-                )
-            )
-
-        copied_files: list[str] = []
-
-        for src_file in sorted(
-            list(plugin_tools.glob("*.cs")) + list(plugin_tools.glob("*.asmdef"))
-        ):
-            dest = target_path / src_file.name
-            shutil.copy2(src_file, dest)
-            copied_files.append(src_file.name)
-
-        new_version = session.detect_bridge_version()
-
+        run_id = uuid.uuid4().hex
+        acquired_lock = bridge_deploy._acquire_deploy_lock(
+            project_root,
+            run_id,
+        )
+        if not isinstance(acquired_lock, int):
+            return acquired_lock.to_dict()
         try:
-            refresh_response = send_action(action="refresh_asset_database")
-        except Exception:
-            logger.debug("Post-deploy asset database refresh failed", exc_info=True)
-        else:
-            if refresh_response.get("success") is not True:
-                return refresh_response
+            prepared = bridge_deploy.prepare_bridge_deploy(
+                project_root,
+                target_path,
+                plugin_tools,
+                run_id=run_id,
+            )
+            if not isinstance(prepared, bridge_deploy.DeployPreparation):
+                return prepared.to_dict()
 
-        return {
-            "success": True,
-            "severity": _compose_envelope_severity(diagnostics),
-            "code": "DEPLOY_OK",
-            "message": f"Deployed {len(copied_files)} files to {target_dir}",
-            "data": {
-                "copied_files": copied_files,
-                "removed_old_files": removed_old_files,
-                "removed_stale_files": removed_stale_files,
-                "old_version": old_version,
-                "new_version": new_version,
-                "target_dir": target_dir,
-            },
-            "diagnostics": diagnostics,
-        }
+            is_fresh_target = (
+                prepared.previous_manifest is None
+                and not prepared.ownership.managed_entries
+            )
+            if is_fresh_target:
+                promotion = bridge_deploy.install_fresh_target(
+                    prepared,
+                    acquired_lock=acquired_lock,
+                )
+                return bridge_deploy.complete_bridge_deploy(
+                    prepared,
+                    promotion,
+                    lock_held=True,
+                ).to_dict()
+
+            target_already_current = (
+                not prepared.ownership.legacy_import
+                and prepared.previous_manifest == prepared.source_manifest
+                and bridge_deploy.verify_deployed_target(
+                    prepared.target_path,
+                    prepared.source_manifest,
+                ).success
+                and _observe_current_bridge_version(project_root)
+                == prepared.source_manifest.bridge_version
+            )
+            if target_already_current:
+                return bridge_deploy.complete_bridge_deploy(
+                    prepared,
+                    bridge_deploy.ExistingTargetReuse(),
+                    lock_held=True,
+                ).to_dict()
+
+            def promote_manifest(
+                manifest: bridge_deploy.BridgeBundleManifest,
+            ) -> dict[str, Any]:
+                try:
+                    return send_private_deploy_action(
+                        action="promote_bridge_bundle",
+                        deploy_run_id=prepared.run_id,
+                        deploy_target_path=prepared.target_path.relative_to(
+                            project_root
+                        ).as_posix(),
+                        deploy_transaction_path=(
+                            prepared.transaction_path.relative_to(
+                                project_root
+                            ).as_posix()
+                        ),
+                        deploy_manifest_sha256=manifest.sha256,
+                        deploy_bridge_version=manifest.bridge_version,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Private Bridge promotion transport failed"
+                    )
+                    return {
+                        "success": False,
+                        "severity": "error",
+                        "code": "EDITOR_BRIDGE_TRANSPORT_EXCEPTION",
+                        "message": "Private Bridge promotion transport failed.",
+                        "data": {},
+                        "diagnostics": [],
+                        "_request_published": True,
+                    }
+
+            promotion_response = promote_manifest(
+                prepared.source_manifest
+            )
+            return bridge_deploy.complete_bridge_deploy(
+                prepared,
+                promotion_response,
+                recovery_action=promote_manifest,
+                lock_held=True,
+            ).to_dict()
+        finally:
+            bridge_deploy._release_deploy_lock(acquired_lock)
 
     @server.tool()
 
@@ -481,13 +626,57 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                 )
             )
 
-        status = session.status()
+        watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
+        captured_watch_dir = (
+            Path(to_wsl_path(watch_dir_raw)) if watch_dir_raw else None
+        )
+        public_bridge = bridge_status(captured_watch_dir)
+        status = session.status(bridge_projection=public_bridge)
         status["python_version"] = python_version
         status["bridge_version"] = bridge_ver
         status["actual_project_root"] = None
         status["project_root_consistent"] = None
 
-        current_bridge = bridge_status()
+        identity_projection: dict[str, Any] | None = None
+        if captured_watch_dir is not None and session.project_root is not None:
+            observation = watch_identity_tracker.observe(
+                watch_dir=captured_watch_dir,
+                project_root=session.project_root,
+                now_unix_ms=time.time_ns() // 1_000_000,
+            )
+            identity_projection = _watch_identity_bridge_projection(observation)
+        if identity_projection is not None:
+            status["bridge"] = identity_projection
+            identity_code = identity_projection["code"]
+            if identity_code in {
+                "EDITOR_BRIDGE_STATUS_TRANSIENT",
+                "EDITOR_BRIDGE_STATUS_UNAVAILABLE",
+            }:
+                transient = identity_code == "EDITOR_BRIDGE_STATUS_TRANSIENT"
+                diagnostics.append(
+                    _build_session_diagnostic(
+                        identity_code,
+                        (
+                            "Editor Bridge status is temporarily unavailable "
+                            "during a Unity reload."
+                            if transient
+                            else "Editor Bridge status artifact is unavailable."
+                        ),
+                        severity=Severity.WARNING,
+                        data={
+                            "connection_state": "unavailable",
+                            "blocker_class": identity_projection["blocker_class"],
+                            "suggested_next_action": identity_projection[
+                                "suggested_next_action"
+                            ],
+                        },
+                    )
+                )
+
+        current_bridge_value = status.get("bridge")
+        if not isinstance(current_bridge_value, dict):
+            raise TypeError("ProjectSession.status bridge projection must be an object.")
+        current_bridge = current_bridge_value
         editor_state: dict[str, Any] | None = None
         blockers: list[dict[str, Any]] = []
         if current_bridge.get("connected"):
@@ -498,10 +687,9 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
             if bridge_resp.get("success"):
                 diagnostics.extend(_bridge_diagnostics_to_session_wire(bridge_resp))
                 raw_editor_state = bridge_resp.get("data", {}).get("editor_state")
-                editor_state = raw_editor_state if isinstance(raw_editor_state, dict) else None
+                editor_state = _copy_editor_state_summary(status, raw_editor_state)
                 context = _operator_context(bridge_resp)
                 _copy_operator_context(status, context)
-                _copy_editor_state_summary(status, editor_state)
                 actual_project_root = status.get("actual_project_root")
                 consistent = _project_roots_consistent(
                     status.get("expected_project_root"),
@@ -520,10 +708,41 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                         ),
                     )
                 blockers.extend(
-                    classify_status_blockers(status, current_bridge, editor_state)
+                    classify_status_blockers(
+                        status,
+                        current_bridge,
+                        editor_state,
+                        configured_watch_dir=captured_watch_dir,
+                    )
                 )
             else:
-                blocker = classify_tool_error_blocker(bridge_resp)
+                raw_bridge_code = bridge_resp.get("code")
+                public_bridge_codes = {
+                    "EDITOR_BRIDGE_ERROR",
+                    "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+                    "EDITOR_BRIDGE_RESPONSE_PUBLICATION_FAILED",
+                    "EDITOR_BRIDGE_RESPONSE_READ",
+                    "EDITOR_BRIDGE_TIMEOUT",
+                    "EDITOR_BRIDGE_WATCH_DIR_MISSING",
+                    "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                    "EDITOR_BRIDGE_WRITE",
+                    "EDITOR_CTRL_HANDLER_EXCEPTION",
+                }
+                public_bridge_code = (
+                    raw_bridge_code
+                    if raw_bridge_code in public_bridge_codes
+                    else "EDITOR_BRIDGE_ERROR"
+                )
+                public_bridge_failure = dict(bridge_resp)
+                public_bridge_failure["code"] = public_bridge_code
+                logger.error(
+                    "Private get_editor_state failure code=%s message=%s data=%r diagnostics=%r",
+                    raw_bridge_code,
+                    bridge_resp.get("message"),
+                    bridge_resp.get("data"),
+                    bridge_resp.get("diagnostics"),
+                )
+                blocker = classify_tool_error_blocker(public_bridge_failure)
                 if blocker is None:
                     blocker = {
                         "blocker_class": BRIDGE_CONNECTION,
@@ -540,12 +759,11 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                         "BRIDGE_GET_EDITOR_STATE_FAILED",
                         (
                             f"get_editor_state bridge action failed: "
-                            f"{bridge_resp.get('code')}"
+                            f"{public_bridge_code}"
                         ),
                         severity=Severity.WARNING,
                         data={
-                            "bridge_code": bridge_resp.get("code"),
-                            "bridge_message": str(bridge_resp.get("message", "")),
+                            "bridge_code": public_bridge_code,
                             "blocker_class": blocker["blocker_class"],
                             "state_source": blocker["state_source"],
                             "suggested_next_action": blocker[
@@ -555,7 +773,12 @@ def register_session_tools(server: MCPServer, session: ProjectSession) -> None:
                     )
                 )
         else:
-            blockers.extend(classify_status_blockers(status, current_bridge, None))
+            blockers.extend(classify_status_blockers(
+                status,
+                current_bridge,
+                None,
+                configured_watch_dir=captured_watch_dir,
+            ))
         status["editor_state"] = editor_state
         status["blockers"] = blockers
 

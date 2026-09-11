@@ -18,6 +18,7 @@ from mcp import Client
 from mcp_types import CallToolResult, TextContent
 
 import prefab_sentinel.editor_bridge as editor_bridge
+import prefab_sentinel.mcp_tools_session as mcp_tools_session
 from prefab_sentinel.contracts import Severity, ToolResponse
 from prefab_sentinel.diagnostics_baseline import DiagnosticsBaseline
 from prefab_sentinel.editor_bridge import BRIDGE_WATCH_DIR_ENV, PROTOCOL_VERSION
@@ -331,6 +332,27 @@ class TestToolsCatalogDoc(unittest.TestCase):
             msg=("docs/tools.md header count must equal the registered MCP tool surface (issue #48)."),
         )
 
+    def test_validate_runtime_catalog_classifies_write_profiles_conditionally(self) -> None:
+        """Catches a catalog regression that advertises audited compile as read-only."""
+        tools = {tool.name: tool for tool in run(create_server().list_tools())}
+        self.assertIn("validate_runtime", tools)
+
+        rows = [
+            line
+            for line in self._TOOLS_MD.read_text(encoding="utf-8").splitlines()
+            if line.startswith("| `validate_runtime` ")
+        ]
+        self.assertEqual(1, len(rows))
+        cells = [cell.strip() for cell in rows[0].strip("|").split("|")]
+        self.assertEqual(
+            ("validation", "conditional/write"),
+            (cells[1], cells[4]),
+            msg=(
+                "validate_runtime must classify its profile-dependent audit boundary as "
+                "conditional/write, not globally read-only."
+            ),
+        )
+
 
 @pytest.mark.source_text_invariant
 class TestInspectorProfileDocumentation(unittest.TestCase):
@@ -339,6 +361,11 @@ class TestInspectorProfileDocumentation(unittest.TestCase):
 
     def _read(self, relative_path: str) -> str:
         return (self._ROOT / relative_path).read_text(encoding="utf-8")
+
+    def _section(self, document: str, heading: str) -> str:
+        start = document.index(heading)
+        next_heading = document.find("\n## ", start + len(heading))
+        return document[start:] if next_heading < 0 else document[start:next_heading]
 
     def test_tools_and_skill_are_discoverable_from_public_catalogs(self) -> None:
         tools = self._read("docs/tools.md")
@@ -499,6 +526,101 @@ class TestInspectorProfileDocumentation(unittest.TestCase):
             msg="TESTING.md does not preserve the complete deferred Unity Inspector checklist",
         )
 
+    def test_api_reference_documents_inspector_scene_lifecycle_contract_in_owning_section(
+        self,
+    ) -> None:
+        api_section = self._section(
+            self._read("docs/api-reference.md"),
+            "## Inspector profile responses",
+        )
+        required = (
+            "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY",
+            "INSPECTOR_SCENE_DIRTY",
+            "EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS",
+            "INSPECTOR_SCENE_AMBIGUOUS",
+            "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+            "INSPECTOR_SCENE_RESTORE_FAILED",
+            "Borrowed",
+            "Owned",
+            "Dirty",
+            "Ambiguous",
+            "path",
+            "location",
+            "detail",
+            "evidence",
+            "inspect_serialized_surface",
+            "inspect_with_profile",
+            "validate_inspector_profile",
+            "controlled operation window",
+        )
+
+        self.assertEqual(
+            {token: True for token in required},
+            {token: token in api_section for token in required},
+            msg=(
+                "Inspector profile response authority must own the raw/public Scene "
+                "codes, lifecycle, sanitized diagnostics, consumers, and warning boundary"
+            ),
+        )
+
+
+    def test_api_reference_maps_dirty_scene_rejection_to_none_ownership(self) -> None:
+        api_section = self._section(
+            self._read("docs/api-reference.md"),
+            "## Inspector profile responses",
+        )
+        scene_start = api_section.index("### Scene inspection lifecycle")
+        next_subsection = api_section.find("\n### ", scene_start + 1)
+        scene_section = (
+            api_section[scene_start:]
+            if next_subsection < 0
+            else api_section[scene_start:next_subsection]
+        )
+        expected = (
+            "- exactly one dirty loaded match is `Dirty` and stops before target "
+            "resolution or surface construction;",
+            "| `EDITOR_CTRL_INSPECTOR_SCENE_DIRTY` | `INSPECTOR_SCENE_DIRTY` | "
+            "The unique loaded target is dirty; ownership is `None`, and no open, "
+            "close, or surface work occurs. |",
+        )
+
+        self.assertEqual(
+            {line: True for line in expected},
+            {line: line in scene_section for line in expected},
+            msg=(
+                "The Scene lifecycle authority must map dirty rejection through None "
+                "ownership to the exact raw and public codes"
+            ),
+        )
+
+    def test_testing_documents_exact_nine_case_inspector_scene_matrix_in_owning_section(
+        self,
+    ) -> None:
+        testing_section = self._section(
+            self._read("TESTING.md"),
+            "## Post-TAKT Unity Inspector verification",
+        )
+        cases = (
+            "borrow unique loaded clean target",
+            "reject unique loaded dirty target",
+            "own unowned target and restore clean active Scene",
+            "own target while unrelated active Scene is dirty and preserve it",
+            "borrow non-active target among multiple loaded Scenes",
+            "target-not-found with owned cleanup",
+            "injected CloseScene=false",
+            "injected active restoration failure",
+            "injected postcondition mismatch",
+        )
+
+        self.assertEqual(
+            {case: True for case in cases},
+            {case: case in testing_section for case in cases},
+            msg=(
+                "Post-TAKT Inspector authority must name the complete repository-owned "
+                "nine-case Unity matrix without treating source registration as live proof"
+            ),
+        )
+
 
 @pytest.mark.source_text_invariant
 class TestSetPropertiesDocumentation(unittest.TestCase):
@@ -589,6 +711,168 @@ class TestSetPropertiesDocumentation(unittest.TestCase):
                 "set_property and set_properties returned writer failures must "
                 "document state_unknown separately from thrown exceptions"
             ),
+        )
+
+
+@pytest.mark.source_text_invariant
+class TestUnityAcceptanceDocumentation(unittest.TestCase):
+    """Issue #186 — specialist documents keep the local acceptance boundary usable."""
+
+    _ROOT = Path(__file__).resolve().parent.parent
+
+    def _read(self, relative_path: str) -> str:
+        return (self._ROOT / relative_path).read_text(encoding="utf-8")
+
+    def test_specialist_documents_describe_the_bounded_acceptance_contract(self) -> None:
+        def section(
+            relative_path: str,
+            start_heading: str,
+            end_heading: str | None,
+        ) -> str:
+            document = self._read(relative_path)
+            start = document.index(start_heading)
+            end = len(document) if end_heading is None else document.index(end_heading, start)
+            return document[start:end]
+
+        expected_by_section = {
+            (
+                "TESTING.md",
+                "## Local Unity Bridge acceptance (Issue #186)",
+                "\n## Mutation testing",
+            ): (
+                "scripts/run_unity_bridge_acceptance.py",
+                "source → preflight → deploy → compile/reload → environment → smoke → cleanup",
+                "#193 and #194",
+                "PR evidence checklist",
+                "--recover-run-id",
+            ),
+            (
+                "CONFIGURATION.md",
+                "## Local Unity Bridge acceptance inputs (Issue #186)",
+                "\n## ignore_guids.txt 形式仕様",
+            ): ("--confirm-live", "--out-report", "--recover-run-id"),
+            (
+                "docs/api-reference.md",
+                "## `editor_run_tests` acceptance profile (issue #186)",
+                "\n## Unity acceptance cleanup lease (issue #186)",
+            ): (
+                "`profile`（default: `default`）",
+                "`live_probes`（default: `false`）",
+                "`run_id`（default: empty string）",
+                "`timeout_sec`（default: `300`）",
+                "ACCEPTANCE_OPT_IN_REQUIRED",
+                "ACCEPTANCE_REPORT_WRITE_FAILED",
+                "ACCEPTANCE_OK",
+            ),
+            (
+                "docs/execution-reference.md",
+                "## Local Unity Bridge acceptance execution (Issue #186)",
+                "\n## CI / テスト実行",
+            ): (
+                "unity_bridge_acceptance.v1",
+                "`audit`",
+                "`source`",
+                "`environment`",
+                "`preflight`",
+                "`deploy`",
+                "`compile`",
+                "`smoke`",
+                "`cleanup`",
+                "`result`",
+                "watch-directory identity marker contents",
+                "--recover-run-id",
+                "recovery-only",
+            ),
+            (
+                "docs/tools.md",
+                "### editor_view",
+                "\n### editor_geometry",
+            ): ("`editor_run_tests`", "bridge_acceptance", "No new public MCP tool"),
+            ("CHANGELOG.md", "## [Unreleased]", "\n## [0.8.1]"): (
+                "Issue #186",
+                "Local Unity Bridge acceptance",
+            ),
+        }
+
+        for (relative_path, start_heading, end_heading), expected_contract in (
+            expected_by_section.items()
+        ):
+            owning_section = section(relative_path, start_heading, end_heading)
+            self.assertEqual(
+                {item: True for item in expected_contract},
+                {item: item in owning_section for item in expected_contract},
+                msg=f"{relative_path} owning acceptance section is incomplete",
+            )
+
+        readme = self._read("README.md")
+        self.assertNotIn("scripts/run_unity_bridge_acceptance.py", readme)
+
+@pytest.mark.source_text_invariant
+class TestWatchIdentityDocumentation(unittest.TestCase):
+    """Issue #179 — public status projection must stay diagnosable and path-free."""
+
+    _ROOT = Path(__file__).resolve().parent.parent
+
+    def _read(self, relative_path: str) -> str:
+        return (self._ROOT / relative_path).read_text(encoding="utf-8")
+
+    def test_api_reference_preserves_exact_watch_identity_projection(self) -> None:
+        api_reference = self._read("docs/api-reference.md")
+        section_start = api_reference.index("## `get_project_status` live/saved status metadata")
+        section_end = api_reference.index("\n## SerializedProperty editor payload", section_start)
+        status_section = api_reference[section_start:section_end]
+        expected_contract = (
+            "`connection_state`（`connected` / `not_configured` / `unavailable` / "
+            "`misconfigured`）",
+            "`success=true`, `severity=\"warning\"`, `code=\"SESSION_STATUS\"`",
+            "`connected=false`, `connection_state=\"misconfigured\"`, "
+            "`code=\"EDITOR_BRIDGE_WATCH_DIR_MISMATCH\"`, "
+            "`blocker_class=\"watch_dir\"`",
+            "`{blocker_class=\"watch_dir\", state_source=\"bridge_transport\", "
+            "message=\"Configured watch directory differs from the active Unity "
+            "Editor Bridge watch directory.\", "
+            "suggested_next_action=\"Use the same watch directory for Codex and the "
+            "Unity Editor Bridge.\"}`",
+            "private status path `Library/PrefabSentinel/bridge-status-v1.json`",
+            "marker IDs、watch paths、timestamps、private status content、raw exceptions "
+            "are not public",
+            "issue #179",
+        )
+
+        self.assertEqual(
+            {contract: True for contract in expected_contract},
+            {contract: contract in status_section for contract in expected_contract},
+            msg="get_project_status API contract is incomplete",
+        )
+        self.assertNotIn(
+            "issue #163",
+            status_section,
+            msg="Obsolete future-identity wording remains in the implemented contract",
+        )
+
+    def test_specialist_documents_preserve_private_artifact_boundaries(self) -> None:
+        architecture = self._read("ARCHITECTURE.md")
+        configuration = self._read("CONFIGURATION.md")
+
+        self.assertIn(
+            "1000 ms 間隔の watch-identity heartbeat",
+            architecture,
+            msg="Bridge heartbeat cadence belongs to the Bridge architecture",
+        )
+        self.assertIn(
+            "Public logs and MCP responses",
+            configuration,
+            msg="Configuration must identify the public redaction boundary",
+        )
+        self.assertIn(
+            "private diagnostic logs may include artifact paths and raw exceptions",
+            configuration,
+            msg="Configuration must retain private failure-diagnostic observability",
+        )
+        self.assertIn(
+            "must not include marker identities or private status content",
+            configuration,
+            msg="Private logging must still redact marker identity and status content",
         )
 
 
@@ -3544,15 +3828,163 @@ class TestEditorSideEffectTools(unittest.TestCase):
 
     def test_editor_run_tests_delegates(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            (call_tool_result(server,"editor_run_tests", {}))
-        mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=300)
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            call_tool_result(server, "editor_run_tests", {})
+        mock_send.assert_called_once_with(
+            action="run_integration_tests",
+            test_profile="default",
+            run_live_probes=False,
+            run_id="",
+            timeout_sec=300,
+        )
 
     def test_editor_run_tests_custom_timeout(self) -> None:
         server = create_server()
-        with patch("prefab_sentinel.mcp_tools_editor_view.send_action", return_value={"success": True}) as mock_send:
-            (call_tool_result(server,"editor_run_tests", {"timeout_sec": 600}))
-        mock_send.assert_called_once_with(action="run_integration_tests", timeout_sec=600)
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as mock_send:
+            call_tool_result(
+                server,
+                "editor_run_tests",
+                {"timeout_sec": 600},
+            )
+        mock_send.assert_called_once_with(
+            action="run_integration_tests",
+            test_profile="default",
+            run_live_probes=False,
+            run_id="",
+            timeout_sec=600,
+        )
+
+
+class TestEditorRunTests(unittest.TestCase):
+    """Issue #186: explicit acceptance requests are validated before transport."""
+
+    def test_editor_run_tests_forwards_acceptance_profile(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+            return_value={"success": True},
+        ) as send:
+            call_tool_result(
+                server,
+                "editor_run_tests",
+                {
+                    "profile": "bridge_acceptance",
+                    "live_probes": True,
+                    "run_id": "a" * 32,
+                    "timeout_sec": 300,
+                },
+            )
+
+        send.assert_called_once_with(
+            action="run_integration_tests",
+            test_profile="bridge_acceptance",
+            run_live_probes=True,
+            run_id="a" * 32,
+            timeout_sec=300,
+        )
+
+    def test_editor_run_tests_rejects_unknown_profile_before_transport(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+        ) as send:
+            result = structured_payload(
+                call_tool_result(
+                    server,
+                    "editor_run_tests",
+                    {"profile": "historical_full"},
+                )
+            )
+
+        self.assertEqual(
+            (False, "EDITOR_CTRL_TEST_PROFILE_INVALID", 0),
+            (result["success"], result["code"], send.call_count),
+        )
+
+    def test_editor_run_tests_requires_explicit_live_probes_for_acceptance(self) -> None:
+        server = create_server()
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_view.send_action",
+        ) as send:
+            result = structured_payload(
+                call_tool_result(
+                    server,
+                    "editor_run_tests",
+                    {
+                        "profile": "bridge_acceptance",
+                        "live_probes": False,
+                        "run_id": "a" * 32,
+                    },
+                )
+            )
+
+        self.assertEqual(
+            (False, "EDITOR_CTRL_TEST_LIVE_PROBES_REQUIRED", 0),
+            (result["success"], result["code"], send.call_count),
+        )
+
+    def test_editor_run_tests_rejects_malformed_acceptance_run_id(self) -> None:
+        server = create_server()
+        invalid_run_ids = (
+            "",
+            "a" * 31,
+            "a" * 33,
+            "A" * 32,
+            "g" * 32,
+        )
+        for run_id in invalid_run_ids:
+            with self.subTest(run_id=run_id):
+                with patch(
+                    "prefab_sentinel.mcp_tools_editor_view.send_action",
+                ) as send:
+                    result = structured_payload(
+                        call_tool_result(
+                            server,
+                            "editor_run_tests",
+                            {
+                                "profile": "bridge_acceptance",
+                                "live_probes": True,
+                                "run_id": run_id,
+                            },
+                        )
+                    )
+
+                self.assertEqual(
+                    (False, "EDITOR_CTRL_TEST_RUN_ID_INVALID", 0),
+                    (result["success"], result["code"], send.call_count),
+                )
+
+    def test_editor_run_tests_rejects_acceptance_only_inputs_on_default_profile(self) -> None:
+        server = create_server()
+        cases = (
+            (
+                {"profile": "default", "live_probes": True},
+                "EDITOR_CTRL_TEST_LIVE_PROBES_INVALID",
+            ),
+            (
+                {"profile": "default", "run_id": "a" * 32},
+                "EDITOR_CTRL_TEST_RUN_ID_INVALID",
+            ),
+        )
+        for arguments, expected_code in cases:
+            with self.subTest(arguments=arguments):
+                with patch(
+                    "prefab_sentinel.mcp_tools_editor_view.send_action",
+                ) as send:
+                    result = structured_payload(
+                        call_tool_result(server, "editor_run_tests", arguments)
+                    )
+
+                self.assertEqual(
+                    (False, expected_code, 0),
+                    (result["success"], result["code"], send.call_count),
+                )
 
 
 class TestEditorRecompileNaming(unittest.TestCase):
@@ -5248,18 +5680,21 @@ class TestRevertOverridesTool(unittest.TestCase):
         self.assertTrue(result["success"])
 
     def test_confirm_mode(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {
-            "success": True,
-            "code": "REVERT_APPLIED",
-            "data": {"match_count": 1, "read_only": False},
-        }
+        response = ToolResponse(
+            success=True,
+            severity=Severity.INFO,
+            code="REVERT_APPLIED",
+            message="Override reverted.",
+            data={"match_count": 1, "read_only": False},
+        )
         server = create_server()
         with patch(
             "prefab_sentinel.mcp_tools_patch.revert_overrides_impl",
-            return_value=mock_resp,
+            return_value=response,
         ) as mock_revert:
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "revert_overrides",
                     {
                         "asset_path": "Assets/V.prefab",
@@ -5279,7 +5714,10 @@ class TestRevertOverridesTool(unittest.TestCase):
             confirm=True,
             change_reason="Remove unwanted override",
         )
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "REVERT_APPLIED"),
+            (result["success"], result["code"]),
+        )
 
     def test_empty_change_reason_becomes_none(self) -> None:
         mock_resp = MagicMock()
@@ -5504,139 +5942,134 @@ class TestEffectiveInspectorTools(unittest.TestCase):
 
 
 class TestValidateRuntimeTool(unittest.TestCase):
-    def _runtime_with_validation_steps(self):
-        from unittest.mock import MagicMock
+    def test_omitted_profile_reaches_typed_required_profile_envelope(self) -> None:
+        from tempfile import TemporaryDirectory
 
-        from prefab_sentinel.contracts import Severity, ToolResponse
+        from prefab_sentinel.orchestrator import Phase1Orchestrator
 
-        runtime = MagicMock()
-        runtime.assert_no_critical_errors = MagicMock()
-        runtime.compile_udonsharp.return_value = ToolResponse(
-            True, Severity.INFO, "RUN_COMPILE_OK", "m", {"read_only": True}
-        )
-        runtime.run_clientsim.return_value = ToolResponse(
-            True, Severity.INFO, "RUN_CLIENTSIM_OK", "m", {"read_only": False}
-        )
-        runtime.collect_unity_console.return_value = ToolResponse(
-            True,
-            Severity.INFO,
-            "RUN_LOG_COLLECTED",
-            "m",
-            {"read_only": True, "log_lines": []},
-        )
-        runtime.classify_errors.return_value = ToolResponse(
-            True, Severity.INFO, "RUN_CLASSIFY_OK", "m", {"read_only": True}
-        )
-        runtime.assert_no_critical_errors.return_value = ToolResponse(
-            True, Severity.INFO, "RUN_ASSERT_OK", "m", {"read_only": True}
-        )
-        return runtime
-
-    def test_delegates_to_orchestrator_with_compile_only_defaults(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"steps": []}}
-        mock_orch = MagicMock()
-        mock_orch.validate_runtime.return_value = mock_resp
-
-        server = create_server()
-        with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
-            result = structured_payload(call_tool_result(server,
-                    "validate_runtime",
-                    {"asset_path": "Assets/Scenes/Main.unity"},
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Assets").mkdir()
+            orchestrator = Phase1Orchestrator.default(root)
+            with (
+                patch.object(
+                    orchestrator.runtime_validation,
+                    "execute_write_profile",
+                ) as execute_write_profile,
+                patch.object(
+                    ProjectSession,
+                    "get_orchestrator",
+                    return_value=orchestrator,
+                ),
+            ):
+                response = structured_payload(
+                    call_tool_result(
+                        create_server(),
+                        "validate_runtime",
+                        {"asset_path": "Assets/Main.unity"},
+                    )
                 )
-            )
 
-        self.assertEqual(
-            True,
-            result["success"],
-            msg=f"validate_runtime tool result mismatch: {result!r}",
+        assert_error_envelope(
+            response,
+            code="RUN_PROFILE_REQUIRED",
+            severity="error",
+            field="profile",
+            message_match=r"^profile is required\.$",
         )
-        mock_orch.validate_runtime.assert_called_once_with(
-            scene_path="Assets/Scenes/Main.unity",
-            profile="compile_only",
-            log_file=None,
-            since_timestamp=None,
-            allow_warnings=False,
-            max_diagnostics=200,
-            confirm=False,
-            change_reason=None,
-            allow_dirty_before_clientsim=False,
-        )
+        self.assertEqual("profile is required.", response["message"])
+        execute_write_profile.assert_not_called()
 
-    def test_passes_all_params(self) -> None:
+    def test_passes_audited_write_profile_parameters(self) -> None:
         mock_resp = MagicMock()
         mock_resp.to_dict.return_value = {"success": True}
         mock_orch = MagicMock()
         mock_orch.validate_runtime.return_value = mock_resp
 
-        server = create_server()
         with patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch):
-            (call_tool_result(server,
-                    "validate_runtime",
-                    {
-                        "asset_path": "Assets/S.unity",
-                        "profile": "clientsim",
-                        "log_file": "/tmp/Editor.log",
-                        "since_timestamp": "2026-05-30T00:00:00Z",
-                        "allow_warnings": True,
-                        "max_diagnostics": 50,
-                        "confirm": True,
-                        "change_reason": "audit clientsim validation",
-                        "allow_dirty_before_clientsim": True,
-                    },
-                )
+            call_tool_result(
+                create_server(),
+                "validate_runtime",
+                {
+                    "asset_path": "Assets/S.unity",
+                    "profile": "compile_only",
+                    "log_file": "/tmp/Editor.log",
+                    "console_authority": "editor_bridge",
+                    "since_timestamp": "2026-05-30T00:00:00Z",
+                    "allow_warnings": True,
+                    "max_diagnostics": 50,
+                    "confirm": True,
+                    "change_reason": "audit compile-only validation",
+                    "out_report": "Audit/runtime.json",
+                    "generated_asset_policy": "replace",
+                    "allow_dirty_program_assets_before_compile": True,
+                    "allow_dirty_scenes_before_compile": True,
+                },
             )
 
         mock_orch.validate_runtime.assert_called_once_with(
             scene_path="Assets/S.unity",
-            profile="clientsim",
+            profile="compile_only",
             log_file="/tmp/Editor.log",
             since_timestamp="2026-05-30T00:00:00Z",
             allow_warnings=True,
             max_diagnostics=50,
             confirm=True,
-            change_reason="audit clientsim validation",
-            allow_dirty_before_clientsim=True,
+            change_reason="audit compile-only validation",
+            out_report="Audit/runtime.json",
+            generated_asset_policy="replace",
+            allow_dirty_program_assets_before_compile=True,
+            allow_dirty_scenes_before_compile=True,
+            console_authority="editor_bridge",
         )
 
-    def test_validate_runtime_rejects_unknown_profile(self) -> None:
-        from prefab_sentinel.contracts import Severity
-        from prefab_sentinel.orchestrator_validation import validate_runtime
+    def test_validate_runtime_schema_keeps_profile_optional_and_exposes_write_controls(self) -> None:
+        tools = {tool.name: tool for tool in run(create_server().list_tools())}
+        schema = cast(dict[str, Any], tools["validate_runtime"].input_schema)
+        properties = cast(dict[str, Any], schema["properties"])
 
-        runtime = self._runtime_with_validation_steps()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "Scene.unity"
-            scene.write_text("%YAML 1.1\n", encoding="utf-8")
-            response = validate_runtime(runtime, str(scene), profile="smoke")
-
+        self.assertNotIn("profile", schema.get("required", []))
         self.assertEqual(
-            (False, "VALIDATE_RUNTIME_PROFILE_UNSUPPORTED", Severity.ERROR),
-            (response.success, response.code, response.severity),
-            msg=f"unsupported runtime profile envelope mismatch: {response.to_dict()!r}",
+            {
+                "out_report",
+                "generated_asset_policy",
+                "allow_dirty_program_assets_before_compile",
+                "allow_dirty_scenes_before_compile",
+                "console_authority",
+            },
+            {
+                name
+                for name in properties
+                if name
+                in {
+                    "out_report",
+                    "generated_asset_policy",
+                    "allow_dirty_program_assets_before_compile",
+                    "allow_dirty_scenes_before_compile",
+                    "console_authority",
+                }
+            },
         )
-        runtime.compile_udonsharp.assert_not_called()
-        runtime.run_clientsim.assert_not_called()
+        self.assertEqual("unity_log", properties["console_authority"]["default"])
 
-    def test_validate_runtime_clientsim_requires_audit_pair(self) -> None:
-        from prefab_sentinel.contracts import Severity
-        from prefab_sentinel.orchestrator_validation import validate_runtime
-
-        runtime = self._runtime_with_validation_steps()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scene = Path(temp_dir) / "Scene.unity"
-            scene.write_text("%YAML 1.1\n", encoding="utf-8")
-            response = validate_runtime(runtime, str(scene), profile="clientsim")
-
-        self.assertEqual(
-            (False, "CLIENTSIM_CONFIRM_REQUIRED", Severity.ERROR),
-            (response.success, response.code, response.severity),
-            msg=f"clientsim audit gate envelope mismatch: {response.to_dict()!r}",
+    def test_patch_apply_schema_omits_runtime_shortcut_arguments(self) -> None:
+        tools = {tool.name: tool for tool in run(create_server().list_tools())}
+        properties = cast(
+            dict[str, Any],
+            tools["patch_apply"].input_schema["properties"],
         )
-        self.assertIn("explicit audit", response.message)
-        runtime.compile_udonsharp.assert_not_called()
-        runtime.run_clientsim.assert_not_called()
+
+        self.assertTrue(
+            {
+                "runtime_scene",
+                "runtime_profile",
+                "runtime_log_file",
+                "runtime_since_timestamp",
+                "runtime_allow_warnings",
+                "runtime_max_diagnostics",
+            }.isdisjoint(properties),
+            msg=f"patch_apply still exposes runtime shortcut fields: {sorted(properties)!r}",
+        )
 
 
 class TestPatchApplyTool(unittest.TestCase):
@@ -5667,12 +6100,6 @@ class TestPatchApplyTool(unittest.TestCase):
             change_reason=None,
             out_report=None,
             scope=None,
-            runtime_scene=None,
-            runtime_profile="default",
-            runtime_log_file=None,
-            runtime_since_timestamp=None,
-            runtime_allow_warnings=False,
-            runtime_max_diagnostics=200,
             transactional=True,
         )
 
@@ -6171,12 +6598,6 @@ class TestPatchApplyTool(unittest.TestCase):
             change_reason="test refresh failure",
             out_report=None,
             scope=None,
-            runtime_scene=None,
-            runtime_profile="default",
-            runtime_log_file=None,
-            runtime_since_timestamp=None,
-            runtime_allow_warnings=False,
-            runtime_max_diagnostics=200,
             transactional=True,
         )
         mock_orch.maybe_auto_refresh.assert_called_once_with()
@@ -6594,19 +7015,36 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                     )
                 )
             after = target.read_bytes()
+
+            transaction = (result.get("data") or {}).get("transaction") or {}
+            self.assertEqual(
+                (
+                    False,
+                    "error",
+                    "PATCH_APPLY_RESULT",
+                    "not_started",
+                    True,
+                    {
+                        "success": True,
+                        "code": "REPORT_WRITTEN",
+                        "error": None,
+                    },
+                ),
+                (
+                    result.get("success"),
+                    result.get("severity"),
+                    result.get("code"),
+                    transaction.get("status"),
+                    transaction.get("report_written"),
+                    transaction.get("report_result"),
+                ),
+                msg=f"embedded-null target returned an unexpected result: {result!r}",
+            )
             persisted = json.loads(report.read_text(encoding="utf-8"))
 
         self.assertEqual(
-            (False, "error", "PATCH_APPLY_RESULT", "not_started", before, 0, result),
-            (
-                result["success"],
-                result["severity"],
-                result["code"],
-                result["data"]["transaction"]["status"],
-                after,
-                apply_mock.call_count,
-                persisted,
-            ),
+            (before, 0, result),
+            (after, apply_mock.call_count, persisted),
             msg=f"public transaction left an orphan report or mutated its target: {result!r}",
         )
 
@@ -6810,12 +7248,6 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
             change_reason="Compose nested prefab",
             out_report="transaction.json",
             scope=None,
-            runtime_scene=None,
-            runtime_profile="default",
-            runtime_log_file=None,
-            runtime_since_timestamp=None,
-            runtime_allow_warnings=False,
-            runtime_max_diagnostics=200,
             transactional=True,
         )
         self.assertEqual(
@@ -7530,295 +7962,2470 @@ class TestExpectedRootProviderLifespan(unittest.TestCase):
 
 
 class TestDeployBridgeCleanup(unittest.TestCase):
-    """deploy_bridge old file cleanup and unconditional deploy."""
+    """Public deploy_bridge transaction orchestration."""
 
     def setUp(self) -> None:
         self._tmp = Path(tempfile.mkdtemp())
         self._project_root = self._tmp / "UnityProject"
         self._project_root.mkdir()
-        self._target = self._project_root / "Assets" / "Editor" / "PrefabSentinel"
-        self._target.mkdir(parents=True)
+        self._target = (
+            self._project_root / "Assets" / "Editor" / "PrefabSentinel"
+        )
+        fake_pkg = self._tmp / "fake_pkg" / "prefab_sentinel"
+        self._bridge_source = fake_pkg / "_bridge_files"
+        self._bridge_source.mkdir(parents=True)
+        self._module_file_patch = patch.object(
+            mcp_tools_session,
+            "__file__",
+            str(fake_pkg / "mcp_tools_session.py"),
+        )
+        self._module_file_patch.start()
+        self._write_source("1.2.2")
 
     def tearDown(self) -> None:
+        self._module_file_patch.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
-    @staticmethod
-    def _mock_successful_refresh(mock_send: MagicMock) -> None:
-        mock_send.return_value = {"success": True}
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removes_old_files_from_parent(self, mock_send: MagicMock) -> None:
-        """Old PrefabSentinel.*.cs in parent dir are removed before deploy."""
-        self._mock_successful_refresh(mock_send)
-        parent = self._target.parent
-        old_cs = parent / "PrefabSentinel.EditorBridge.cs"
-        old_meta = parent / "PrefabSentinel.EditorBridge.cs.meta"
-        old_cs.write_text("// old", encoding="utf-8")
-        old_meta.write_text("guid: abc", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertIn("PrefabSentinel.EditorBridge.cs", result["data"]["removed_old_files"])
-        self.assertIn("PrefabSentinel.EditorBridge.cs.meta", result["data"]["removed_old_files"])
-        self.assertFalse(old_cs.exists())
-        self.assertFalse(old_meta.exists())
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_old_files_no_removal(self, mock_send: MagicMock) -> None:
-        """When parent has no old files, removed_old_files is empty."""
-        self._mock_successful_refresh(mock_send)
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertEqual(result["data"]["removed_old_files"], [])
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_no_old_files(self, mock_send: MagicMock) -> None:
-        """First deploy to a new path has no old files to clean up."""
-        self._mock_successful_refresh(mock_send)
-        deep_target = self._project_root / "Assets" / "NewDir" / "SubDir" / "Bridge"
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(deep_target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertEqual(result["data"]["removed_old_files"], [])
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_upload_handler_always_deployed(self, mock_send: MagicMock) -> None:
-        """VRCSDKUploadHandler.cs is always copied unconditionally."""
-        self._mock_successful_refresh(mock_send)
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertIn("PrefabSentinel.VRCSDKUploadHandler.cs", result["data"]["copied_files"])
-        self.assertTrue((self._target / "PrefabSentinel.VRCSDKUploadHandler.cs").exists())
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_asmdef_deployed(self, mock_send: MagicMock) -> None:
-        """PrefabSentinel.Editor.asmdef is copied alongside C# files."""
-        self._mock_successful_refresh(mock_send)
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertIn("PrefabSentinel.Editor.asmdef", result["data"]["copied_files"])
-        self.assertTrue((self._target / "PrefabSentinel.Editor.asmdef").exists())
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_no_skipped_files_in_response(self, mock_send: MagicMock) -> None:
-        """Response data must not contain skipped_files key."""
-        self._mock_successful_refresh(mock_send)
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertNotIn("skipped_files", result["data"])
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_diagnostics_warn_on_old_file_removal(self, mock_send: MagicMock) -> None:
-        """Diagnostics include warning when old files are removed."""
-        self._mock_successful_refresh(mock_send)
-        parent = self._target.parent
-        (parent / "PrefabSentinel.EditorBridge.cs").write_text("// old", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
-        self.assertTrue(any("old Bridge" in d["message"] for d in warnings))
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_cleanup_warning_sets_success_envelope_severity(
+    def _write_source(
         self,
-        mock_send: MagicMock,
+        version: str,
+        *,
+        include_extra: bool = False,
     ) -> None:
-        self._mock_successful_refresh(mock_send)
-        parent = self._target.parent
-        (parent / "PrefabSentinel.Legacy.cs").write_text("// old", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
+        for entry in self._bridge_source.iterdir():
+            entry.unlink()
+        (self._bridge_source / "PrefabSentinel.UnityEditorControlBridge.cs").write_bytes(
+            f'public const string BridgeVersion = "{version}";'.encode()
+        )
+        (self._bridge_source / "PrefabSentinel.Editor.asmdef").write_bytes(
+            b'{"name":"PrefabSentinel.Editor"}'
+        )
+        if include_extra:
+            (self._bridge_source / "PrefabSentinel.Extra.cs").write_bytes(
+                b"public sealed class Extra {}"
             )
+
+    def _call_deploy(self, target_dir: Path | None = None) -> dict[str, Any]:
+        server = create_server(project_root=str(self._project_root))
+        arguments = {} if target_dir is None else {"target_dir": str(target_dir)}
+        return structured_payload(
+            call_tool_result(server, "deploy_bridge", arguments)
         )
 
+    def _manifest_at(
+        self,
+        path: Path,
+    ) -> mcp_tools_session.bridge_deploy.BridgeBundleManifest:
+        result = mcp_tools_session.bridge_deploy.build_bridge_manifest(path)
+        self.assertIsInstance(
+            result,
+            mcp_tools_session.bridge_deploy.BridgeBundleManifest,
+        )
+        assert isinstance(
+            result,
+            mcp_tools_session.bridge_deploy.BridgeBundleManifest,
+        )
+        return result
+
+    def _assert_public_redacted(
+        self,
+        response: dict[str, Any],
+        *secrets: str,
+    ) -> None:
+        pending: list[Any] = [response]
+        public_strings: list[str] = []
+        while pending:
+            value = pending.pop()
+            if isinstance(value, str):
+                public_strings.append(value)
+            elif isinstance(value, dict):
+                pending.extend(value.keys())
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+        for secret in secrets:
+            self.assertFalse(
+                any(secret in value for value in public_strings),
+                msg=f"public deployment envelope leaked {secret!r}: {response!r}",
+            )
+
+    def _install_old_bundle(self) -> dict[str, Any]:
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=AssertionError(
+                "fresh deployment must not call the private Bridge action"
+            ),
+        ):
+            result = self._call_deploy()
         self.assertTrue(result["success"])
-        self.assertEqual("warning", result["severity"])
-        warnings = [d for d in result["diagnostics"] if d["severity"] == "warning"]
-        self.assertTrue(any(d["code"] == "DEPLOY_REMOVED_OLD_BRIDGE_FILES" for d in warnings))
+        return result
 
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_removes_all_target_files(self, mock_send: MagicMock) -> None:
-        """All pre-existing files in target_dir are removed before deploy."""
-        self._mock_successful_refresh(mock_send)
-        (self._target / "Dummy.cs").write_text("// dummy", encoding="utf-8")
-        (self._target / "Dummy.cs.meta").write_text("guid: dummy", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
+    def _promote_staged_bundle(
+        self,
+        *,
+        action: str,
+        deploy_run_id: str,
+        deploy_target_path: str,
+        deploy_transaction_path: str,
+        deploy_manifest_sha256: str,
+        deploy_bridge_version: str,
+        response_code: str = "DEPLOY_OK",
+        corrupt_after_promotion: bool = False,
+    ) -> dict[str, Any]:
+        self.assertEqual("promote_bridge_bundle", action)
+        self.assertRegex(deploy_run_id, r"^[0-9a-f]{32}$")
+        self.assertEqual("Assets/Editor/PrefabSentinel", deploy_target_path)
+        self.assertEqual(
+            (
+                "Library/PrefabSentinel/deploy-transactions/"
+                f"{deploy_run_id}"
+            ),
+            deploy_transaction_path,
         )
+        self.assertRegex(deploy_manifest_sha256, r"^[0-9a-f]{64}$")
+        self.assertIn(deploy_bridge_version, {"1.2.2", "1.2.3"})
 
-        self.assertTrue(result["success"])
-        self.assertFalse((self._target / "Dummy.cs").exists())
-        self.assertFalse((self._target / "Dummy.cs.meta").exists())
+        transaction = self._project_root / deploy_transaction_path
+        target = self._project_root / deploy_target_path
+        backup = transaction / "backup-target"
+        target.rename(backup)
+        (transaction / "staged-target").rename(target)
+        if corrupt_after_promotion:
+            (
+                target / "PrefabSentinel.UnityEditorControlBridge.cs"
+            ).write_bytes(b"corrupt")
 
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_preserves_subdirectories(self, mock_send: MagicMock) -> None:
-        """Subdirectories inside target_dir survive the clean phase."""
-        self._mock_successful_refresh(mock_send)
-        subdir = self._target / "subdir"
-        subdir.mkdir()
-        (subdir / "keep.txt").write_text("keep", encoding="utf-8")
+        succeeded = response_code == "DEPLOY_OK"
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": succeeded,
+            "severity": "info" if succeeded else "error",
+            "code": response_code,
+            "message": (
+                "Bridge bundle promotion completed."
+                if succeeded
+                else "Bridge bundle promotion completed but refresh failed."
+            ),
+            "data": {
+                "executed": True,
+                "promotion_state": "promoted",
+                "barrier_used": True,
+                "rollback_attempted": False,
+                "rollback_restored": False,
+                "backup_retained": True,
+                "target_complete": True,
+                "manifest_sha256": deploy_manifest_sha256,
+                "bridge_version": deploy_bridge_version,
+            },
+            "diagnostics": [],
+            "bridge_version": "1.2.2",
+            "bridge_mode": "editor",
+            "action": action,
+            "request_id": "c" * 32,
+        }
 
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
+    def _failed_promotion_response(
+        self,
+        request: dict[str, Any],
+        *,
+        code: str,
+        promotion_state: str,
+        rollback_attempted: bool,
+        rollback_restored: bool,
+        backup_retained: bool,
+        target_complete: bool,
+    ) -> dict[str, Any]:
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": False,
+            "severity": (
+                "critical"
+                if code == "DEPLOY_ROLLBACK_FAILED"
+                else "error"
+            ),
+            "code": code,
+            "message": "Bridge bundle promotion did not complete.",
+            "data": {
+                "executed": promotion_state != "not_attempted",
+                "promotion_state": promotion_state,
+                "barrier_used": True,
+                "rollback_attempted": rollback_attempted,
+                "rollback_restored": rollback_restored,
+                "backup_retained": backup_retained,
+                "target_complete": target_complete,
+                "manifest_sha256": request["deploy_manifest_sha256"],
+                "bridge_version": request["deploy_bridge_version"],
+            },
+            "diagnostics": [],
+            "bridge_version": "1.2.2",
+            "bridge_mode": "editor",
+            "action": "promote_bridge_bundle",
+            "request_id": "d" * 32,
+        }
 
-        self.assertTrue(result["success"])
-        self.assertTrue(subdir.is_dir())
-        self.assertTrue((subdir / "keep.txt").exists())
-        self.assertIsInstance(result["data"]["removed_stale_files"], list)
 
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_removed_stale_files_in_response(self, mock_send: MagicMock) -> None:
-        """Stale files removed during clean phase appear in response data."""
-        self._mock_successful_refresh(mock_send)
-        (self._target / "OldFile.cs").write_text("// old", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertIn("OldFile.cs", result["data"]["removed_stale_files"])
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_clean_redeploy_diagnostic_message(self, mock_send: MagicMock) -> None:
-        """Clearing files produces an info diagnostic with 'Cleared' message."""
-        self._mock_successful_refresh(mock_send)
-        (self._target / "Stale.cs").write_text("// stale", encoding="utf-8")
-
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
-            )
-        )
-
-        infos = [d for d in result["diagnostics"] if d["severity"] == "info"]
-        self.assertTrue(any("Cleared" in d["message"] for d in infos))
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_first_deploy_empty_removed_stale(self, mock_send: MagicMock) -> None:
-        """First deploy to empty target_dir has empty removed_stale_files."""
-        self._mock_successful_refresh(mock_send)
-        fresh_target = self._project_root / "Assets" / "Editor" / "FreshDeploy"
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(fresh_target)},
-            )
-        )
-
-        self.assertTrue(result["success"])
-        self.assertEqual(result["data"]["removed_stale_files"], [])
-
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_returns_refresh_failure_envelope(self, mock_send: MagicMock) -> None:
-        """A failed post-copy refresh is the deploy result."""
-        refresh_failure = {
+    def _legacy_patch_dispatch_response(
+        self,
+        *,
+        action: str,
+    ) -> dict[str, Any]:
+        return {
+            "protocol_version": PROTOCOL_VERSION,
             "success": False,
             "severity": "error",
-            "code": "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
-            "message": "expected root did not match reached Unity project",
-            "data": {"action": "refresh_asset_database"},
+            "code": "UNITY_BRIDGE_SCHEMA",
+            "message": "target is required.",
+            "data": {
+                "target": "",
+                "op_count": 0,
+                "applied": 0,
+                "read_only": False,
+                "executed": False,
+                "protocol_version": PROTOCOL_VERSION,
+                "created_results": [],
+            },
             "diagnostics": [],
+            "bridge_mode": "editor",
+            "action": action,
+            "request_id": "e" * 32,
+            "_request_published": True,
         }
-        mock_send.return_value = refresh_failure
 
-        server = create_server(project_root=str(self._project_root))
-        result = structured_payload(call_tool_result(server,
-                "deploy_bridge",
-                {"target_dir": str(self._target)},
+    def test_source_read_failure_preserves_exact_old_target_and_redacts_exception(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        secret = str(self._bridge_source / "private-source-read")
+        original_read_bytes = Path.read_bytes
+
+        def reject_source_read(path: Path) -> bytes:
+            if path.parent == self._bridge_source:
+                raise OSError(secret)
+            return original_read_bytes(path)
+
+        with patch.object(Path, "read_bytes", new=reject_source_read):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_SOURCE_NOT_FOUND", result["code"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            source_manifest.sha256,
+            self._manifest_at(self._bridge_source).sha256,
+        )
+        self.assertTrue(transactions.is_dir())
+        self.assertEqual([], list(transactions.iterdir()))
+        self._assert_public_redacted(result, secret, str(self._project_root))
+
+    def test_stage_copy_failure_preserves_exact_old_target_and_redacts_exception(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        secret = str(self._project_root / "private-stage-copy")
+
+        with patch.object(
+            mcp_tools_session.bridge_deploy.shutil,
+            "copyfile",
+            side_effect=OSError(secret),
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_STAGING_FAILED", result["code"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            source_manifest.sha256,
+            self._manifest_at(self._bridge_source).sha256,
+        )
+        self.assertTrue(transactions.is_dir())
+        self.assertEqual([], list(transactions.iterdir()))
+        self._assert_public_redacted(result, secret, str(self._project_root))
+
+    def test_stage_hash_failure_preserves_exact_old_target_and_redacts_payload(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        secret = b"/private/stage-hash-payload"
+        original_copyfile = mcp_tools_session.bridge_deploy.shutil.copyfile
+
+        def copy_then_corrupt(source: Path, destination: Path) -> Path:
+            copied = original_copyfile(source, destination)
+            if Path(destination).suffix == ".cs":
+                Path(destination).write_bytes(
+                    Path(destination).read_bytes() + secret
+                )
+            return copied
+
+        with patch.object(
+            mcp_tools_session.bridge_deploy.shutil,
+            "copyfile",
+            side_effect=copy_then_corrupt,
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_STAGING_MISMATCH", result["code"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            source_manifest.sha256,
+            self._manifest_at(self._bridge_source).sha256,
+        )
+        self.assertTrue(transactions.is_dir())
+        self.assertEqual([], list(transactions.iterdir()))
+        self._assert_public_redacted(result, secret.decode(), str(self._project_root))
+
+    def test_private_action_exception_preserves_exact_old_target_and_is_redacted(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        secret = str(self._project_root / "private-action-exception")
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=RuntimeError(secret),
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertEqual("critical", result["severity"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            source_manifest.sha256,
+            result["data"]["source_manifest_sha256"],
+        )
+        self._assert_public_redacted(result, secret, str(self._project_root))
+
+    def test_old_target_backup_move_failure_keeps_exact_old_target(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        observed: dict[str, Path] = {}
+
+        def fail_before_backup(**request: Any) -> dict[str, Any]:
+            observed["transaction"] = (
+                self._project_root / request["deploy_transaction_path"]
             )
+            return self._failed_promotion_response(
+                request,
+                code="DEPLOY_PROMOTION_FAILED",
+                promotion_state="not_attempted",
+                rollback_attempted=False,
+                rollback_restored=False,
+                backup_retained=False,
+                target_complete=True,
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=fail_before_backup,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        backup = transaction / "backup-target"
+        staging = transaction / "staged-target"
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertFalse(result["data"]["transaction_retained"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            old_manifest.sha256,
+            result["data"]["manifest_sha256"],
+        )
+        self.assertEqual(
+            source_manifest.sha256,
+            result["data"]["source_manifest_sha256"],
+        )
+        self.assertFalse(transaction.exists())
+        self.assertFalse(backup.exists())
+        self.assertFalse(staging.exists())
+
+    def test_new_target_promotion_move_failure_restores_exact_old_target(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        observed: dict[str, Path] = {}
+
+        def fail_new_target_move(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            observed["transaction"] = transaction
+            backup = transaction / "backup-target"
+            self._target.rename(backup)
+            try:
+                raise OSError("new-target promotion move failed")
+            except OSError:
+                backup.rename(self._target)
+            return self._failed_promotion_response(
+                request,
+                code="DEPLOY_ROLLED_BACK",
+                promotion_state="rolled_back",
+                rollback_attempted=True,
+                rollback_restored=True,
+                backup_retained=False,
+                target_complete=True,
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=fail_new_target_move,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        backup = transaction / "backup-target"
+        staging = transaction / "staged-target"
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLED_BACK", result["code"])
+        self.assertTrue(result["data"]["rollback_restored"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertFalse(result["data"]["transaction_retained"])
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            old_manifest.sha256,
+            result["data"]["manifest_sha256"],
+        )
+        self.assertEqual(
+            source_manifest.sha256,
+            result["data"]["source_manifest_sha256"],
+        )
+        self.assertFalse(transaction.exists())
+        self.assertFalse(backup.exists())
+        self.assertFalse(staging.exists())
+
+    def test_rollback_move_failure_retains_exact_old_backup_and_exact_new_target(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        observed: dict[str, Path] = {}
+
+        def fail_rollback_move(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            backup = transaction / "backup-target"
+            self._target.rename(backup)
+            (transaction / "staged-target").rename(self._target)
+            observed["transaction"] = transaction
+            return self._failed_promotion_response(
+                request,
+                code="DEPLOY_ROLLBACK_FAILED",
+                promotion_state="rollback_failed",
+                rollback_attempted=True,
+                rollback_restored=False,
+                backup_retained=True,
+                target_complete=False,
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=fail_rollback_move,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertEqual("critical", result["severity"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            old_manifest.sha256,
+            self._manifest_at(transaction / "backup-target").sha256,
         )
 
-        mock_send.assert_called_once_with(action="refresh_asset_database")
-        self.assertEqual(refresh_failure, result)
+    def test_ownership_publication_failure_keeps_exact_new_and_redacts_exception(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        ownership_path = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-ownership-v1.json"
+        )
+        secret = str(self._project_root / "private-ownership-write")
+        original_replace = mcp_tools_session.bridge_deploy.os.replace
+        observed: dict[str, Path] = {}
 
-    @patch("prefab_sentinel.mcp_tools_session.send_action")
-    def test_uses_bridge_files_dir_when_available(self, mock_send: MagicMock) -> None:
-        """When _bridge_files/ exists (wheel install), uses it over tools/unity/."""
-        self._mock_successful_refresh(mock_send)
-        # Create _bridge_files in a temp dir and patch __file__ to point there
-        fake_pkg = self._tmp / "fake_pkg" / "prefab_sentinel"
-        fake_pkg.mkdir(parents=True)
-        bridge_dir = fake_pkg / "_bridge_files"
-        bridge_dir.mkdir()
-        test_cs = bridge_dir / "PrefabSentinel.TestBridge.cs"
-        test_cs.write_text("// from _bridge_files", encoding="utf-8")
-
-        import prefab_sentinel.mcp_tools_session as mcp_mod
-
-        original_file = mcp_mod.__file__
-        mcp_mod.__file__ = str(fake_pkg / "mcp_tools_session.py")
-        try:
-            server = create_server(project_root=str(self._project_root))
-            result = structured_payload(call_tool_result(server,
-                    "deploy_bridge",
-                    {"target_dir": str(self._target)},
-                )
+        def promote(**request: Any) -> dict[str, Any]:
+            observed["transaction"] = (
+                self._project_root / request["deploy_transaction_path"]
             )
-        finally:
-            mcp_mod.__file__ = original_file
+            return self._promote_staged_bundle(**request)
+
+        def reject_ownership_replace(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            if Path(destination) == ownership_path:
+                raise OSError(secret)
+            original_replace(source, destination)
+
+        with (
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.os,
+                "replace",
+                side_effect=reject_ownership_replace,
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_OWNERSHIP_WRITE_FAILED", result["code"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            old_manifest.sha256,
+            self._manifest_at(transaction / "backup-target").sha256,
+        )
+        self._assert_public_redacted(result, secret, str(self._project_root))
+
+
+    def test_ownership_failure_rejects_nonexistent_backup_evidence(self) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        ownership_path = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-ownership-v1.json"
+        )
+        original_replace = mcp_tools_session.bridge_deploy.os.replace
+        observed: dict[str, Path] = {}
+
+        def promote_without_canonical_backup(**request: Any) -> dict[str, Any]:
+            response = self._promote_staged_bundle(**request)
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            (transaction / "backup-target").rename(
+                transaction / "old-bundle-outside-canonical-backup"
+            )
+            observed["transaction"] = transaction
+            return response
+
+        def reject_ownership_replace(
+            source: Path,
+            destination: Path,
+        ) -> None:
+            if Path(destination) == ownership_path:
+                raise OSError("private ownership failure")
+            original_replace(source, destination)
+
+        with (
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote_without_canonical_backup,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.os,
+                "replace",
+                side_effect=reject_ownership_replace,
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_OWNERSHIP_WRITE_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertFalse((transaction / "backup-target").exists())
+
+    def test_promotion_observations_expose_only_exact_before_and_after_states(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        observations: list[tuple[str, str]] = []
+        original_rename = Path.rename
+
+        def observe_named_moves(path: Path, destination: Path) -> Path:
+            destination_path = Path(destination)
+            if path == self._target:
+                observations.append(
+                    ("before_barrier", self._manifest_at(path).sha256)
+                )
+            moved = original_rename(path, destination_path)
+            if (
+                path.name == "staged-target"
+                and destination_path == self._target
+            ):
+                observations.append(
+                    ("after_barrier", self._manifest_at(destination_path).sha256)
+                )
+            return moved
+
+        with (
+            patch.object(Path, "rename", new=observe_named_moves),
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=self._promote_staged_bundle,
+            ),
+        ):
+            result = self._call_deploy()
 
         self.assertTrue(result["success"])
-        # Should have copied from _bridge_files, not tools/unity/
-        self.assertIn("PrefabSentinel.TestBridge.cs", result["data"]["copied_files"])
-        # Should NOT contain files from tools/unity/
-        self.assertNotIn("PrefabSentinel.EditorBridge.cs", result["data"]["copied_files"])
+        self.assertEqual(
+            [
+                ("before_barrier", old_manifest.sha256),
+                ("after_barrier", source_manifest.sha256),
+            ],
+            observations,
+        )
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+
+    def test_fresh_absent_target_uses_complete_install_without_bridge_action(
+        self,
+    ) -> None:
+        result = self._install_old_bundle()
+
+        self.assertEqual("DEPLOY_OK", result["code"])
+        self.assertEqual("installed_fresh", result["data"]["promotion_state"])
+        self.assertFalse(result["data"]["barrier_used"])
+        self.assertEqual("1.2.2", result["data"]["bridge_version"])
+        self.assertEqual(
+            result["data"]["source_manifest_sha256"],
+            result["data"]["manifest_sha256"],
+        )
+        self.assertEqual(
+            {
+                "PrefabSentinel.Editor.asmdef",
+                "PrefabSentinel.UnityEditorControlBridge.cs",
+            },
+            {entry.name for entry in self._target.iterdir()},
+        )
+
+    def test_fresh_promotion_failure_projects_canonical_retained_staging(
+        self,
+    ) -> None:
+        with patch(
+            "prefab_sentinel.bridge_deploy.os.rename",
+            side_effect=OSError("forced fresh rename failure"),
+        ):
+            result = self._call_deploy()
+
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        retained_runs = list(transactions.iterdir())
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertRegex(
+            result["data"]["source_manifest_sha256"],
+            r"^[0-9a-f]{64}$",
+        )
+        self.assertEqual("", result["data"]["manifest_sha256"])
+        self.assertEqual("", result["data"]["bridge_version"])
+        self.assertTrue(result["data"]["staging_prepared"])
+        self.assertTrue(result["data"]["staging_verified"])
+        self.assertEqual("not_attempted", result["data"]["promotion_state"])
+        self.assertFalse(result["data"]["target_complete"])
+        self.assertFalse(result["data"]["ownership_published"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual([], result["data"]["deployed_files"])
+        self.assertEqual(1, len(retained_runs))
+        self.assertTrue((retained_runs[0] / "staged-target").is_dir())
+
+    @staticmethod
+    def _cleanup_failure() -> ToolResponse:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="DEPLOY_CLEANUP_FAILED",
+            message="forced cleanup failure",
+        )
+
+    def test_fresh_cleanup_failure_reports_absent_backup_truthfully(
+        self,
+    ) -> None:
+        with patch.object(
+            mcp_tools_session.bridge_deploy,
+            "cleanup_deploy_transaction",
+            side_effect=lambda _prepared: self._cleanup_failure(),
+        ):
+            result = self._call_deploy()
+
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        retained_runs = list(transactions.iterdir())
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_CLEANUP_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual(1, len(retained_runs))
+        self.assertFalse((retained_runs[0] / "backup-target").exists())
+
+    def test_existing_cleanup_failure_reports_present_backup_truthfully(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        secret = str(self._project_root / "private-backup-cleanup")
+        observed: dict[str, Path] = {}
+
+        def promote(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            observed["transaction"] = transaction
+            return self._promote_staged_bundle(**request)
+
+        with (
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.shutil,
+                "rmtree",
+                side_effect=OSError(secret),
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_CLEANUP_FAILED", result["code"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            old_manifest.sha256,
+            self._manifest_at(transaction / "backup-target").sha256,
+        )
+        self._assert_public_redacted(result, secret, str(self._project_root))
+
+
+    def test_cleanup_failure_rejects_corrupt_backup_evidence(self) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        observed: dict[str, Path] = {}
+
+        def promote(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            response = self._promote_staged_bundle(**request)
+            transaction.joinpath(
+                "backup-target/PrefabSentinel.UnityEditorControlBridge.cs"
+            ).write_bytes(b"corrupt")
+            observed["transaction"] = transaction
+            return response
+
+        with (
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.shutil,
+                "rmtree",
+                side_effect=OSError("private cleanup failed"),
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_CLEANUP_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertTrue((transaction / "backup-target").is_dir())
+
+    def test_new_target_cleanup_failure_reports_partial_old_backup_exactly(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        source_files = {
+            path.name: path.read_bytes()
+            for path in self._bridge_source.iterdir()
+        }
+        observed: dict[str, Path] = {}
+        sentinel = "PRIVATE_PARTIAL_OLD_BACKUP_FAILURE"
+
+        def promote(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            observed["transaction"] = transaction
+            return self._promote_staged_bundle(**request)
+
+        def partially_remove_old_backup(
+            path: Path,
+            *,
+            onerror: Any = None,
+        ) -> None:
+            self.assertEqual(observed["transaction"], path)
+            self.assertIsNotNone(onerror)
+            assert onerror is not None
+            path.joinpath("source-manifest-v1.json").unlink()
+            backup = path / "backup-target"
+            backup.joinpath("PrefabSentinel.Editor.asmdef").unlink()
+            error = PermissionError(
+                13,
+                sentinel,
+                str(backup / "PRIVATE_OLD_BACKUP_PATH"),
+            )
+            onerror(
+                os.unlink,
+                backup / "PrefabSentinel.UnityEditorControlBridge.cs",
+                (type(error), error, None),
+            )
+            self.fail("cleanup callback returned instead of raising")
+
+        with (
+            self.assertLogs(
+                "prefab_sentinel.bridge_deploy",
+                level="WARNING",
+            ) as captured,
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.shutil,
+                "rmtree",
+                side_effect=partially_remove_old_backup,
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertEqual(
+            {
+                "success": False,
+                "severity": "critical",
+                "code": "DEPLOY_CLEANUP_FAILED",
+                "message": (
+                    "Bridge deployment completed but transaction cleanup failed."
+                ),
+                "data": {
+                    "source_manifest_sha256": source_manifest.sha256,
+                    "manifest_sha256": source_manifest.sha256,
+                    "bridge_version": "1.2.3",
+                    "source_file_count": 3,
+                    "managed_entry_count": 3,
+                    "unmanaged_entry_count": 0,
+                    "preserved_meta_count": 0,
+                    "stale_owned_count": 0,
+                    "staging_prepared": True,
+                    "staging_verified": True,
+                    "promotion_state": "promoted",
+                    "barrier_used": True,
+                    "rollback_attempted": False,
+                    "rollback_restored": False,
+                    "backup_retained": False,
+                    "target_complete": True,
+                    "ownership_published": True,
+                    "transaction_retained": True,
+                    "deployed_files": sorted(source_files),
+                    "recovery_required": True,
+                },
+                "diagnostics": [],
+            },
+            result,
+        )
+        self.assertEqual(
+            source_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        backup = transaction / "backup-target"
+        self.assertEqual(
+            {
+                "PrefabSentinel.UnityEditorControlBridge.cs": (
+                    b'public const string BridgeVersion = "1.2.2";'
+                ),
+            },
+            {path.name: path.read_bytes() for path in backup.iterdir()},
+        )
+        self.assertNotEqual(old_manifest.sha256, self._manifest_at(backup).sha256)
+        self.assertFalse(
+            mcp_tools_session.bridge_deploy.verify_deployed_target(
+                backup,
+                old_manifest,
+            ).success
+        )
+        self.assertEqual(
+            [
+                "backup-target",
+                "backup-target/PrefabSentinel.UnityEditorControlBridge.cs",
+            ],
+            sorted(
+                path.relative_to(transaction).as_posix()
+                for path in transaction.rglob("*")
+            ),
+        )
+        ownership = mcp_tools_session.bridge_deploy.load_ownership_record(
+            self._project_root,
+            self._target,
+        )
+        self.assertIsInstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        assert isinstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        self.assertEqual(source_manifest, ownership.manifest)
+        self.assertEqual(transaction.name, ownership.last_transaction_id)
+        cleanup_records = [
+            record
+            for record in captured.records
+            if record.getMessage().startswith("Bridge transaction cleanup failed ")
+        ]
+        self.assertEqual(1, len(cleanup_records))
+        self.assertEqual(
+            ("unlink", "PermissionError", 13, None),
+            cleanup_records[0].args,
+        )
+        self._assert_public_redacted(
+            result,
+            sentinel,
+            str(self._project_root),
+            "transaction_cleanup",
+        )
+
+    def test_fresh_cleanup_root_rmdir_failure_reports_empty_retained_root(
+        self,
+    ) -> None:
+        source_manifest = self._manifest_at(self._bridge_source)
+        source_files = {
+            path.name: path.read_bytes()
+            for path in self._bridge_source.iterdir()
+        }
+        observed: dict[str, Path] = {}
+        real_rmtree = shutil.rmtree
+
+        def fail_root_rmdir(
+            path: Path,
+            *,
+            onerror: Any = None,
+        ) -> None:
+            observed["transaction"] = path
+            self.assertIsNotNone(onerror)
+            assert onerror is not None
+            for child in tuple(path.iterdir()):
+                if child.is_dir():
+                    real_rmtree(child)
+                else:
+                    child.unlink()
+            self.assertEqual([], list(path.iterdir()))
+            error = PermissionError(13, "PRIVATE_ROOT_RMDIR", str(path))
+            onerror(os.rmdir, path, (type(error), error, None))
+            self.fail("cleanup callback returned instead of raising")
+
+        with (
+            self.assertLogs(
+                "prefab_sentinel.bridge_deploy",
+                level="WARNING",
+            ) as captured,
+            patch.object(
+                mcp_tools_session.bridge_deploy.shutil,
+                "rmtree",
+                side_effect=fail_root_rmdir,
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertEqual(
+            {
+                "success": False,
+                "severity": "critical",
+                "code": "DEPLOY_CLEANUP_FAILED",
+                "message": (
+                    "Bridge deployment completed but transaction cleanup failed."
+                ),
+                "data": {
+                    "source_manifest_sha256": source_manifest.sha256,
+                    "manifest_sha256": source_manifest.sha256,
+                    "bridge_version": "1.2.2",
+                    "source_file_count": 2,
+                    "managed_entry_count": 2,
+                    "unmanaged_entry_count": 0,
+                    "preserved_meta_count": 0,
+                    "stale_owned_count": 0,
+                    "staging_prepared": True,
+                    "staging_verified": True,
+                    "promotion_state": "installed_fresh",
+                    "barrier_used": False,
+                    "rollback_attempted": False,
+                    "rollback_restored": False,
+                    "backup_retained": False,
+                    "target_complete": True,
+                    "ownership_published": True,
+                    "transaction_retained": True,
+                    "deployed_files": sorted(source_files),
+                    "recovery_required": True,
+                },
+                "diagnostics": [],
+            },
+            result,
+        )
+        self.assertTrue(transaction.is_dir())
+        self.assertEqual([], list(transaction.iterdir()))
+        self.assertEqual(
+            source_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        ownership = mcp_tools_session.bridge_deploy.load_ownership_record(
+            self._project_root,
+            self._target,
+        )
+        self.assertIsInstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        assert isinstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        self.assertEqual(source_manifest, ownership.manifest)
+        self.assertEqual(transaction.name, ownership.last_transaction_id)
+        cleanup_records = [
+            record
+            for record in captured.records
+            if record.getMessage().startswith("Bridge transaction cleanup failed ")
+        ]
+        self.assertEqual(1, len(cleanup_records))
+        self.assertEqual(
+            ("root_rmdir", "PermissionError", 13, None),
+            cleanup_records[0].args,
+        )
+
+    def _assert_restored_old_cleanup_failure(
+        self,
+        *,
+        partial_candidate: bool,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        ownership_path = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-ownership-v1.json"
+        )
+        old_ownership_bytes = ownership_path.read_bytes()
+        old_ownership = mcp_tools_session.bridge_deploy.load_ownership_record(
+            self._project_root,
+            self._target,
+        )
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        source_files = {
+            path.name: path.read_bytes()
+            for path in self._bridge_source.iterdir()
+        }
+        observed: dict[str, Path] = {}
+        requested_versions: list[str] = []
+        sentinel = "PRIVATE_RESTORED_OLD_CLEANUP_FAILURE"
+
+        def corrupt_then_restore(**request: Any) -> dict[str, Any]:
+            requested_versions.append(request["deploy_bridge_version"])
+            response = self._promote_staged_bundle(
+                **request,
+                corrupt_after_promotion=len(requested_versions) == 1,
+            )
+            observed["transaction"] = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            return response
+
+        def retain_new_candidate(
+            path: Path,
+            *,
+            onerror: Any = None,
+        ) -> None:
+            self.assertEqual(observed["transaction"], path)
+            self.assertIsNotNone(onerror)
+            assert onerror is not None
+            path.joinpath("source-manifest-v1.json").unlink()
+            candidate = path / "backup-target"
+            if partial_candidate:
+                candidate.joinpath("PrefabSentinel.Extra.cs").unlink()
+            error = PermissionError(
+                13,
+                sentinel,
+                str(candidate / "PRIVATE_NEW_CANDIDATE_PATH"),
+            )
+            onerror(
+                os.unlink,
+                candidate / "PrefabSentinel.UnityEditorControlBridge.cs",
+                (type(error), error, None),
+            )
+            self.fail("cleanup callback returned instead of raising")
+
+        with (
+            self.assertLogs(
+                "prefab_sentinel.bridge_deploy",
+                level="WARNING",
+            ) as captured,
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=corrupt_then_restore,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy.shutil,
+                "rmtree",
+                side_effect=retain_new_candidate,
+            ),
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        candidate_files = dict(source_files)
+        candidate_files["PrefabSentinel.UnityEditorControlBridge.cs"] = b"corrupt"
+        if partial_candidate:
+            candidate_files.pop("PrefabSentinel.Extra.cs")
+        self.assertEqual(["1.2.3", "1.2.2"], requested_versions)
+        self.assertEqual(
+            {
+                "success": False,
+                "severity": "critical",
+                "code": "DEPLOY_CLEANUP_FAILED",
+                "message": (
+                    "Bridge deployment completed but transaction cleanup failed."
+                ),
+                "data": {
+                    "source_manifest_sha256": source_manifest.sha256,
+                    "manifest_sha256": old_manifest.sha256,
+                    "bridge_version": "1.2.2",
+                    "source_file_count": 3,
+                    "managed_entry_count": 2,
+                    "unmanaged_entry_count": 0,
+                    "preserved_meta_count": 0,
+                    "stale_owned_count": 0,
+                    "staging_prepared": True,
+                    "staging_verified": True,
+                    "promotion_state": "rolled_back",
+                    "barrier_used": True,
+                    "rollback_attempted": True,
+                    "rollback_restored": True,
+                    "backup_retained": False,
+                    "target_complete": True,
+                    "ownership_published": True,
+                    "transaction_retained": True,
+                    "deployed_files": sorted(old_files),
+                    "recovery_required": True,
+                },
+                "diagnostics": [],
+            },
+            result,
+        )
+        self.assertEqual(
+            old_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        self.assertEqual(old_manifest.sha256, self._manifest_at(self._target).sha256)
+        candidate = transaction / "backup-target"
+        self.assertEqual(
+            candidate_files,
+            {path.name: path.read_bytes() for path in candidate.iterdir()},
+        )
+        self.assertFalse(
+            mcp_tools_session.bridge_deploy.verify_deployed_target(
+                candidate,
+                old_manifest,
+            ).success
+        )
+        self.assertEqual(
+            ["backup-target"]
+            + [f"backup-target/{name}" for name in sorted(candidate_files)],
+            sorted(
+                path.relative_to(transaction).as_posix()
+                for path in transaction.rglob("*")
+            ),
+        )
+        self.assertEqual(old_ownership_bytes, ownership_path.read_bytes())
+        self.assertEqual(
+            old_ownership,
+            mcp_tools_session.bridge_deploy.load_ownership_record(
+                self._project_root,
+                self._target,
+            ),
+        )
+        cleanup_records = [
+            record
+            for record in captured.records
+            if record.getMessage().startswith("Bridge transaction cleanup failed ")
+        ]
+        self.assertEqual(1, len(cleanup_records))
+        self.assertEqual(
+            ("unlink", "PermissionError", 13, None),
+            cleanup_records[0].args,
+        )
+        self.assertIsNone(cleanup_records[0].exc_info)
+        self.assertIsNone(cleanup_records[0].stack_info)
+        self._assert_public_redacted(
+            result,
+            sentinel,
+            str(self._project_root),
+            "transaction_cleanup",
+            "operation",
+            "error_type",
+            "errno",
+            "winerror",
+        )
+
+    def test_restored_old_target_retains_complete_new_candidate_after_cleanup_failure(
+        self,
+    ) -> None:
+        self._assert_restored_old_cleanup_failure(partial_candidate=False)
+
+    def test_restored_old_target_retains_partial_new_candidate_after_cleanup_failure(
+        self,
+    ) -> None:
+        self._assert_restored_old_cleanup_failure(partial_candidate=True)
+
+    def test_unmanaged_custom_target_is_rejected_before_private_action(
+        self,
+    ) -> None:
+        custom_target = self._project_root / "Assets" / "ExampleProject"
+        custom_target.mkdir(parents=True)
+        unmanaged = custom_target / "UserScript.cs"
+        unmanaged.write_bytes(b"user-owned")
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=AssertionError(
+                "unmanaged preflight must stop before private promotion"
+            ),
+        ):
+            result = self._call_deploy(custom_target)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_TARGET_UNMANAGED", result["code"])
+        self.assertEqual(b"user-owned", unmanaged.read_bytes())
+        self.assertNotIn(str(self._project_root), json.dumps(result))
+
+    def test_parent_bridge_sibling_is_preserved_and_rejected(self) -> None:
+        parent = self._target.parent
+        parent.mkdir(parents=True)
+        conflict = parent / "PrefabSentinel.Legacy.cs"
+        conflict.write_bytes(b"user-owned legacy sibling")
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=AssertionError(
+                "parent conflict must stop before private promotion"
+            ),
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PARENT_CONFLICT", result["code"])
+        self.assertEqual(b"user-owned legacy sibling", conflict.read_bytes())
+
+    def test_existing_owned_target_sends_exact_private_promotion_request(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_bytes = (
+            self._target / "PrefabSentinel.UnityEditorControlBridge.cs"
+        ).read_bytes()
+        self._write_source("1.2.3", include_extra=True)
+        captured: dict[str, object] = {}
+
+        def promote(**request: Any) -> dict[str, Any]:
+            captured.update(request)
+            return self._promote_staged_bundle(**request)
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=promote,
+        ):
+            result = self._call_deploy()
+
+        self.assertTrue(result["success"])
+        self.assertEqual("DEPLOY_OK", result["code"])
+        self.assertEqual("promoted", result["data"]["promotion_state"])
+        self.assertTrue(result["data"]["barrier_used"])
+        self.assertEqual("1.2.3", result["data"]["bridge_version"])
+        self.assertEqual(
+            {
+                "action",
+                "deploy_run_id",
+                "deploy_target_path",
+                "deploy_transaction_path",
+                "deploy_manifest_sha256",
+                "deploy_bridge_version",
+            },
+            set(captured),
+        )
+        self.assertNotEqual(
+            old_bytes,
+            (
+                self._target / "PrefabSentinel.UnityEditorControlBridge.cs"
+            ).read_bytes(),
+        )
+        self.assertEqual(
+            b"public sealed class Extra {}",
+            (self._target / "PrefabSentinel.Extra.cs").read_bytes(),
+        )
+        self.assertEqual(
+            result["data"]["source_manifest_sha256"],
+            result["data"]["manifest_sha256"],
+        )
+
+
+    def test_existing_byte_equal_target_is_reused_without_private_promotion(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        before_manifest = self._manifest_at(self._target)
+        bridge_file = (
+            self._target / "PrefabSentinel.UnityEditorControlBridge.cs"
+        )
+        before_mtime_ns = bridge_file.stat().st_mtime_ns
+        expected_instance = "a" * 32
+        bridge_response = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "Editor state captured.",
+            "data": {"editor_state": {}},
+            "diagnostics": [],
+            "bridge_version": "1.2.2",
+            "operator_context": {
+                "project_root": str(self._project_root),
+                "bridge_instance_id": expected_instance,
+                "bridge_version": "1.2.2",
+            },
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {"UNITYTOOL_BRIDGE_INSTANCE_ID": expected_instance},
+                clear=False,
+            ),
+            patch.object(
+                mcp_tools_session,
+                "send_action",
+                return_value=bridge_response,
+            ) as bridge_probe,
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=AssertionError(
+                    "byte-equal deployment must not call the private Bridge action"
+                ),
+            ),
+        ):
+            result = self._call_deploy()
+
+        bridge_probe.assert_called_once_with(
+            action="get_editor_state",
+            expected_project_root=str(self._project_root),
+        )
+        after_manifest = self._manifest_at(self._target)
+        transaction_root = (
+            self._project_root
+            / "Library"
+            / "PrefabSentinel"
+            / "deploy-transactions"
+        )
+        retained = (
+            list(transaction_root.iterdir())
+            if transaction_root.is_dir()
+            else []
+        )
+        self.assertEqual(
+            (
+                True,
+                "DEPLOY_OK",
+                "already_current",
+                False,
+                True,
+                True,
+                False,
+                before_manifest,
+                before_mtime_ns,
+                [],
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["data"]["promotion_state"],
+                result["data"]["barrier_used"],
+                result["data"]["target_complete"],
+                result["data"]["ownership_published"],
+                result["data"]["transaction_retained"],
+                after_manifest,
+                bridge_file.stat().st_mtime_ns,
+                retained,
+            ),
+        )
+
+    def test_existing_byte_equal_target_requires_fresh_matching_bridge_identity(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        expected_instance = "a" * 32
+        matching_response: dict[str, Any] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "Editor state captured.",
+            "data": {"editor_state": {}},
+            "diagnostics": [],
+            "bridge_version": "1.2.2",
+            "operator_context": {
+                "project_root": str(self._project_root),
+                "bridge_instance_id": expected_instance,
+                "bridge_version": "1.2.2",
+            },
+        }
+        cases = (
+            (
+                "unobserved",
+                expected_instance,
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_BRIDGE_TIMEOUT",
+                    "message": "Editor bridge response timed out.",
+                    "data": {},
+                    "diagnostics": [],
+                },
+                1,
+            ),
+            (
+                "wrong_project",
+                expected_instance,
+                {
+                    "success": False,
+                    "severity": "error",
+                    "code": "EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH",
+                    "message": "The response belongs to another project.",
+                    "data": {},
+                    "diagnostics": [],
+                },
+                1,
+            ),
+            (
+                "changed_instance",
+                expected_instance,
+                {
+                    **matching_response,
+                    "operator_context": {
+                        **matching_response["operator_context"],
+                        "bridge_instance_id": "b" * 32,
+                    },
+                },
+                1,
+            ),
+            ("missing_host_instance", "", matching_response, 0),
+        )
+
+        for label, host_instance, response, expected_probe_count in cases:
+            with (
+                self.subTest(label=label),
+                patch.dict(
+                    os.environ,
+                    {"UNITYTOOL_BRIDGE_INSTANCE_ID": host_instance},
+                    clear=False,
+                ),
+                patch(
+                    "prefab_sentinel.editor_bridge._last_bridge_version",
+                    "1.2.2",
+                ),
+                patch.object(
+                    mcp_tools_session,
+                    "send_action",
+                    return_value=response,
+                ) as bridge_probe,
+                patch.object(
+                    mcp_tools_session,
+                    "send_private_deploy_action",
+                    side_effect=self._promote_staged_bundle,
+                ) as private_promotion,
+            ):
+                result = self._call_deploy()
+
+            self.assertEqual(
+                (True, "DEPLOY_OK", "promoted", True),
+                (
+                    result["success"],
+                    result["code"],
+                    result["data"]["promotion_state"],
+                    result["data"]["barrier_used"],
+                ),
+            )
+            self.assertEqual(expected_probe_count, bridge_probe.call_count)
+            self.assertEqual(1, private_promotion.call_count)
+
+    def test_existing_lock_contention_stops_before_preparation_and_action(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+        held = mcp_tools_session.bridge_deploy._acquire_deploy_lock(
+            self._project_root,
+            "f" * 32,
+        )
+        self.assertIsInstance(held, int)
+        action_calls = 0
+
+        def record_action(**_request: Any) -> dict[str, Any]:
+            nonlocal action_calls
+            action_calls += 1
+            return {}
+
+        try:
+            with patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=record_action,
+            ):
+                result = self._call_deploy()
+        finally:
+            if isinstance(held, int):
+                mcp_tools_session.bridge_deploy._release_deploy_lock(held)
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertEqual(0, action_calls)
+        self.assertEqual(
+            old_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        if transactions.exists():
+            self.assertEqual([], list(transactions.iterdir()))
+
+    def test_existing_lock_spans_action_ownership_and_cleanup(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        lock_observed: dict[str, bool] = {}
+        original_cleanup = (
+            mcp_tools_session.bridge_deploy.cleanup_deploy_transaction
+        )
+        original_merge = (
+            mcp_tools_session.bridge_deploy._merge_ownership_record_locked
+        )
+
+        def lock_is_held(label: str) -> None:
+            contender = mcp_tools_session.bridge_deploy._acquire_deploy_lock(
+                self._project_root,
+                "f" * 32,
+            )
+            lock_observed[label] = isinstance(contender, ToolResponse)
+            if isinstance(contender, int):
+                mcp_tools_session.bridge_deploy._release_deploy_lock(
+                    contender
+                )
+
+        def promote(**request: Any) -> dict[str, Any]:
+            lock_is_held("action")
+            return self._promote_staged_bundle(**request)
+
+        def merge(prepared: Any) -> ToolResponse:
+            lock_is_held("ownership")
+            return original_merge(prepared)
+
+        def cleanup(prepared: Any) -> ToolResponse:
+            lock_is_held("cleanup")
+            return original_cleanup(prepared)
+
+        with (
+            patch.object(
+                mcp_tools_session,
+                "send_private_deploy_action",
+                side_effect=promote,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy,
+                "_merge_ownership_record_locked",
+                side_effect=merge,
+            ),
+            patch.object(
+                mcp_tools_session.bridge_deploy,
+                "cleanup_deploy_transaction",
+                side_effect=cleanup,
+            ),
+        ):
+            result = self._call_deploy()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(
+            {
+                "action": True,
+                "ownership": True,
+                "cleanup": True,
+            },
+            lock_observed,
+        )
+
+    def test_unknown_private_action_fails_closed_with_old_bytes(self) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+
+        unknown_action = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_UNKNOWN_ACTION",
+            "message": "Unknown action.",
+            "data": {"executed": False},
+            "diagnostics": [],
+            "bridge_version": "1.2.2",
+            "bridge_mode": "editor",
+            "action": "promote_bridge_bundle",
+            "request_id": "d" * 32,
+        }
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            return_value=unknown_action,
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_BARRIER_UNAVAILABLE", result["code"])
+        self.assertEqual(
+            old_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        self.assertEqual(
+            sorted(old_files),
+            result["data"]["deployed_files"],
+        )
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        if transactions.exists():
+            self.assertEqual([], list(transactions.iterdir()))
+
+    def test_legacy_patch_dispatcher_response_reports_unavailable_barrier(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        deployed_manifest = self._manifest_at(self._target)
+        deployed_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        action_calls = 0
+
+        def legacy_patch_dispatcher(**request: Any) -> dict[str, Any]:
+            nonlocal action_calls
+            action_calls += 1
+            return self._legacy_patch_dispatch_response(
+                action=request["action"],
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=legacy_patch_dispatcher,
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_BARRIER_UNAVAILABLE", result["code"])
+        self.assertEqual(1, action_calls)
+        self.assertEqual("not_attempted", result["data"]["promotion_state"])
+        self.assertFalse(result["data"]["barrier_used"])
+        self.assertTrue(result["data"]["target_complete"])
+        self.assertEqual(
+            deployed_manifest.sha256,
+            result["data"]["manifest_sha256"],
+        )
+        self.assertEqual("1.2.2", result["data"]["bridge_version"])
+        self.assertEqual(sorted(deployed_files), result["data"]["deployed_files"])
+        self.assertEqual(
+            deployed_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        if transactions.exists():
+            self.assertEqual([], list(transactions.iterdir()))
+
+    def test_legacy_patch_fingerprint_rejects_each_single_field_mutation(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        deployed_manifest = self._manifest_at(self._target)
+        deployed_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        mutations: tuple[tuple[str, str, str, Any, bool], ...] = (
+            ("target", "data", "target", "Assets/Other.prefab", False),
+            ("op_count", "data", "op_count", 1, False),
+            ("applied", "data", "applied", 1, False),
+            ("read_only", "data", "read_only", True, False),
+            ("executed", "data", "executed", True, False),
+            (
+                "data_protocol_version",
+                "data",
+                "protocol_version",
+                PROTOCOL_VERSION + 1,
+                False,
+            ),
+            ("created_results_shape", "data", "created_results", {}, False),
+            (
+                "created_results_content",
+                "data",
+                "created_results",
+                [{"handle": "unexpected"}],
+                False,
+            ),
+            ("extra_data_key", "data", "unexpected", None, False),
+            ("missing_data_key", "data", "target", None, True),
+            (
+                "response_code",
+                "response",
+                "code",
+                "UNITY_BRIDGE_OTHER",
+                False,
+            ),
+            ("response_action", "response", "action", "patch_apply", False),
+            ("bridge_mode", "response", "bridge_mode", "runtime", False),
+            (
+                "diagnostics",
+                "response",
+                "diagnostics",
+                [{"code": "unexpected"}],
+                False,
+            ),
+            ("success", "response", "success", True, False),
+            ("severity", "response", "severity", "warning", False),
+        )
+
+        for case, scope, key, value, remove in mutations:
+            with self.subTest(case=case):
+                response = self._legacy_patch_dispatch_response(
+                    action="promote_bridge_bundle",
+                )
+                container: dict[str, Any]
+                if scope == "response":
+                    container = response
+                else:
+                    data = response["data"]
+                    if not isinstance(data, dict):
+                        raise AssertionError("exact response data must be a mapping")
+                    container = data
+                if remove:
+                    del container[key]
+                else:
+                    container[key] = value
+
+                before_transactions = (
+                    {path.name for path in transactions.iterdir()}
+                    if transactions.exists()
+                    else set()
+                )
+                action_calls = 0
+
+                def mutated_response(
+                    response_snapshot: dict[str, Any] = response,
+                    **request: Any,
+                ) -> dict[str, Any]:
+                    nonlocal action_calls
+                    action_calls += 1
+                    self.assertEqual(
+                        "promote_bridge_bundle",
+                        request["action"],
+                    )
+                    return response_snapshot
+
+                with patch.object(
+                    mcp_tools_session,
+                    "send_private_deploy_action",
+                    side_effect=mutated_response,
+                ):
+                    result = self._call_deploy()
+
+                self.assertFalse(result["success"])
+                self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+                self.assertEqual("critical", result["severity"])
+                self.assertEqual(1, action_calls)
+                self.assertEqual("promoted", result["data"]["promotion_state"])
+                self.assertTrue(result["data"]["target_complete"])
+                self.assertEqual(
+                    deployed_manifest.sha256,
+                    result["data"]["manifest_sha256"],
+                )
+                self.assertEqual(
+                    deployed_manifest.sha256,
+                    result["data"]["source_manifest_sha256"],
+                )
+                self.assertEqual("1.2.2", result["data"]["bridge_version"])
+                self.assertEqual(
+                    sorted(deployed_files),
+                    result["data"]["deployed_files"],
+                )
+                self.assertFalse(result["data"]["backup_retained"])
+                self.assertTrue(result["data"]["transaction_retained"])
+                self.assertEqual(
+                    deployed_files,
+                    {
+                        path.name: path.read_bytes()
+                        for path in self._target.iterdir()
+                    },
+                )
+
+                after_transactions = {
+                    path.name for path in transactions.iterdir()
+                }
+                retained = after_transactions - before_transactions
+                self.assertEqual(1, len(retained))
+                transaction = transactions / next(iter(retained))
+                self.assertEqual(
+                    deployed_manifest.sha256,
+                    self._manifest_at(transaction / "staged-target").sha256,
+                )
+
+
+    def test_unpublished_legacy_patch_shape_cleans_without_barrier_classification(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        deployed_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        response = self._legacy_patch_dispatch_response(
+            action="promote_bridge_bundle",
+        )
+        response["_request_published"] = False
+        action_calls = 0
+
+        def unpublished_response(**request: Any) -> dict[str, Any]:
+            nonlocal action_calls
+            action_calls += 1
+            self.assertEqual("promote_bridge_bundle", request["action"])
+            return response
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=unpublished_response,
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertNotEqual("DEPLOY_BARRIER_UNAVAILABLE", result["code"])
+        self.assertEqual(1, action_calls)
+        self.assertFalse(result["data"]["transaction_retained"])
+        self.assertEqual(
+            deployed_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        transactions = (
+            self._project_root
+            / "Library/PrefabSentinel/deploy-transactions"
+        )
+        if transactions.exists():
+            self.assertEqual([], list(transactions.iterdir()))
+
+    def test_post_publication_timeout_retains_mutated_transaction_evidence(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+        observed: dict[str, Path] = {}
+
+        def timeout_after_mutation(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            target = self._project_root / request["deploy_target_path"]
+            target.rename(transaction / "backup-target")
+            (transaction / "staged-target").rename(target)
+            observed["transaction"] = transaction
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_BRIDGE_TIMEOUT",
+                "message": "Editor bridge response timed out.",
+                "data": {"action": "promote_bridge_bundle", "timeout_sec": 1},
+                "diagnostics": [],
+                "_request_published": True,
+            }
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=timeout_after_mutation,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertTrue(transaction.is_dir())
+        self.assertEqual(
+            old_files,
+            {
+                path.name: path.read_bytes()
+                for path in (transaction / "backup-target").iterdir()
+            },
+        )
+        self.assertEqual(
+            b"public sealed class Extra {}",
+            (self._target / "PrefabSentinel.Extra.cs").read_bytes(),
+        )
+
+
+    def test_ambiguous_transport_rejects_partial_backup_evidence(self) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        observed: dict[str, Path] = {}
+
+        def timeout_with_partial_backup(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            target = self._project_root / request["deploy_target_path"]
+            backup = transaction / "backup-target"
+            target.rename(backup)
+            (transaction / "staged-target").rename(target)
+            (backup / "PrefabSentinel.Editor.asmdef").unlink()
+            observed["transaction"] = transaction
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_BRIDGE_TIMEOUT",
+                "message": "Editor bridge response timed out.",
+                "data": {},
+                "diagnostics": [],
+                "_request_published": True,
+            }
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=timeout_with_partial_backup,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_PROMOTION_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertTrue((transaction / "backup-target").is_dir())
+
+    def test_python_rejects_promoted_bytes_that_disagree_with_action(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+        requested_versions: list[str] = []
+
+        def corrupt_then_restore(**request: Any) -> dict[str, Any]:
+            requested_versions.append(request["deploy_bridge_version"])
+            return self._promote_staged_bundle(
+                **request,
+                corrupt_after_promotion=len(requested_versions) == 1,
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=corrupt_then_restore,
+        ):
+            result = self._call_deploy()
+
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_FINAL_MANIFEST_MISMATCH", result["code"])
+        self.assertEqual(["1.2.3", "1.2.2"], requested_versions)
+        self.assertEqual("rolled_back", result["data"]["promotion_state"])
+        self.assertTrue(result["data"]["rollback_attempted"])
+        self.assertTrue(result["data"]["rollback_restored"])
+        self.assertEqual(
+            old_files,
+            {path.name: path.read_bytes() for path in self._target.iterdir()},
+        )
+        self.assertNotIn(str(self._project_root), json.dumps(result))
+        self.assertNotIn("corrupt", json.dumps(result))
+
+
+    def test_recovery_preflight_rejects_corrupt_backup_evidence(self) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        calls = 0
+        observed: dict[str, Path] = {}
+
+        def promote_with_corrupt_backup(**request: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            response = self._promote_staged_bundle(
+                **request,
+                corrupt_after_promotion=True,
+            )
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            transaction.joinpath(
+                "backup-target/PrefabSentinel.UnityEditorControlBridge.cs"
+            ).write_bytes(b"corrupt backup")
+            observed["transaction"] = transaction
+            return response
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=promote_with_corrupt_backup,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertEqual(1, calls)
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertTrue((transaction / "backup-target").is_dir())
+
+    def test_rollback_verification_rejects_claimed_restoration_and_retains_exact_old_backup(
+        self,
+    ) -> None:
+        old_result = self._install_old_bundle()
+        old_manifest_sha256 = old_result["data"]["manifest_sha256"]
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = mcp_tools_session.bridge_deploy.build_bridge_manifest(
+            self._bridge_source
+        )
+        self.assertIsInstance(
+            source_manifest,
+            mcp_tools_session.bridge_deploy.BridgeBundleManifest,
+        )
+        assert isinstance(
+            source_manifest,
+            mcp_tools_session.bridge_deploy.BridgeBundleManifest,
+        )
+        observed: dict[str, Path] = {}
+
+        def claim_rollback_without_restoring(**request: Any) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            target = self._project_root / request["deploy_target_path"]
+            backup = transaction / "backup-target"
+            target.rename(backup)
+            (transaction / "staged-target").rename(target)
+            observed["transaction"] = transaction
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "success": False,
+                "severity": "error",
+                "code": "DEPLOY_ROLLED_BACK",
+                "message": (
+                    "Bridge bundle promotion failed and the previous target "
+                    "was restored."
+                ),
+                "data": {
+                    "executed": True,
+                    "promotion_state": "rolled_back",
+                    "barrier_used": True,
+                    "rollback_attempted": True,
+                    "rollback_restored": True,
+                    "backup_retained": True,
+                    "target_complete": True,
+                    "manifest_sha256": request["deploy_manifest_sha256"],
+                    "bridge_version": request["deploy_bridge_version"],
+                },
+                "diagnostics": [],
+                "bridge_version": "1.2.2",
+                "bridge_mode": "editor",
+                "action": "promote_bridge_bundle",
+                "request_id": "f" * 32,
+            }
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=claim_rollback_without_restoring,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        backup_manifest = self._manifest_at(
+            transaction / "backup-target"
+        )
+        target_manifest = self._manifest_at(self._target)
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertEqual("critical", result["severity"])
+        self.assertFalse(result["data"]["rollback_restored"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual(old_manifest_sha256, backup_manifest.sha256)
+        self.assertEqual(source_manifest.sha256, target_manifest.sha256)
+
+    def test_rollback_verification_rejects_corrupt_backup_evidence(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_manifest = self._manifest_at(self._target)
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        corrupt_backup_bytes = (
+            b'public const string BridgeVersion = "9.9.9";'
+        )
+        observed: dict[str, Path] = {}
+
+        def claim_rollback_with_corrupt_backup(
+            **request: Any,
+        ) -> dict[str, Any]:
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            backup = transaction / "backup-target"
+            self._target.rename(backup)
+            (
+                backup / "PrefabSentinel.UnityEditorControlBridge.cs"
+            ).write_bytes(corrupt_backup_bytes)
+            (transaction / "staged-target").rename(self._target)
+            observed["transaction"] = transaction
+            return self._failed_promotion_response(
+                request,
+                code="DEPLOY_ROLLED_BACK",
+                promotion_state="rolled_back",
+                rollback_attempted=True,
+                rollback_restored=True,
+                backup_retained=True,
+                target_complete=True,
+            )
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=claim_rollback_with_corrupt_backup,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        backup = transaction / "backup-target"
+        staging = transaction / "staged-target"
+        backup_manifest = self._manifest_at(backup)
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertEqual("critical", result["severity"])
+        self.assertEqual("rollback_failed", result["data"]["promotion_state"])
+        self.assertFalse(result["data"]["rollback_restored"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertFalse(result["data"]["target_complete"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertEqual("", result["data"]["manifest_sha256"])
+        self.assertTrue(transaction.is_dir())
+        self.assertTrue(backup.is_dir())
+        self.assertFalse(staging.exists())
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertNotEqual(old_manifest.sha256, backup_manifest.sha256)
+        self.assertEqual(
+            corrupt_backup_bytes,
+            (
+                backup / "PrefabSentinel.UnityEditorControlBridge.cs"
+            ).read_bytes(),
+        )
+
+    def test_final_mismatch_recovery_failure_retains_exact_old_backup(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+        attempts = 0
+        observed: dict[str, Path] = {}
+
+        def corrupt_then_fail_recovery(**request: Any) -> dict[str, Any]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return self._promote_staged_bundle(
+                    **request,
+                    corrupt_after_promotion=True,
+                )
+
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            target = self._project_root / request["deploy_target_path"]
+            target.rename(transaction / "backup-target")
+            observed["transaction"] = transaction
+            return {
+                "protocol_version": PROTOCOL_VERSION,
+                "success": False,
+                "severity": "critical",
+                "code": "DEPLOY_ROLLBACK_FAILED",
+                "message": "Bridge bundle promotion and rollback failed.",
+                "data": {
+                    "executed": True,
+                    "promotion_state": "rollback_failed",
+                    "barrier_used": True,
+                    "rollback_attempted": True,
+                    "rollback_restored": False,
+                    "backup_retained": False,
+                    "target_complete": False,
+                    "manifest_sha256": request["deploy_manifest_sha256"],
+                    "bridge_version": request["deploy_bridge_version"],
+                },
+                "diagnostics": [],
+                "bridge_version": "1.2.2",
+                "bridge_mode": "editor",
+                "action": "promote_bridge_bundle",
+                "request_id": "e" * 32,
+            }
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=corrupt_then_fail_recovery,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertEqual("critical", result["severity"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertFalse(result["data"]["rollback_restored"])
+        self.assertTrue(result["data"]["backup_retained"])
+        self.assertFalse((transaction / "staged-target").exists())
+        self.assertEqual(
+            old_files,
+            {
+                path.name: path.read_bytes()
+                for path in (transaction / "backup-target").iterdir()
+            },
+        )
+
+    def test_ambiguous_recovery_transport_keeps_exact_old_staging_in_place(
+        self,
+    ) -> None:
+        self._install_old_bundle()
+        old_files = {
+            path.name: path.read_bytes()
+            for path in self._target.iterdir()
+        }
+        self._write_source("1.2.3", include_extra=True)
+        attempts = 0
+        observed: dict[str, Path] = {}
+
+        def corrupt_then_timeout(**request: Any) -> dict[str, Any]:
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return self._promote_staged_bundle(
+                    **request,
+                    corrupt_after_promotion=True,
+                )
+            transaction = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            observed["transaction"] = transaction
+            return {
+                "success": False,
+                "severity": "error",
+                "code": "EDITOR_BRIDGE_TIMEOUT",
+                "message": "Editor bridge response timed out.",
+                "data": {},
+                "diagnostics": [],
+                "_request_published": True,
+            }
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=corrupt_then_timeout,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_ROLLBACK_FAILED", result["code"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertTrue(result["data"]["transaction_retained"])
+        self.assertFalse((transaction / "backup-target").exists())
+        self.assertEqual(
+            old_files,
+            {
+                path.name: path.read_bytes()
+                for path in (transaction / "staged-target").iterdir()
+            },
+        )
+
+    def test_refresh_failure_preserves_verified_target_evidence(self) -> None:
+        self._install_old_bundle()
+        self._write_source("1.2.3", include_extra=True)
+        source_manifest = self._manifest_at(self._bridge_source)
+        secret = str(self._project_root / "private-refresh-scheduling")
+        observed: dict[str, Path] = {}
+
+        def refresh_failing_promote(**request: Any) -> dict[str, Any]:
+            observed["transaction"] = (
+                self._project_root / request["deploy_transaction_path"]
+            )
+            response = self._promote_staged_bundle(
+                **request,
+                response_code="DEPLOY_REFRESH_FAILED",
+            )
+            response["message"] = secret
+            response["data"]["raw_exception"] = {
+                "path": secret,
+                "detail": f"refresh failed at {secret}",
+            }
+            return response
+
+        with patch.object(
+            mcp_tools_session,
+            "send_private_deploy_action",
+            side_effect=refresh_failing_promote,
+        ):
+            result = self._call_deploy()
+
+        transaction = observed["transaction"]
+        backup = transaction / "backup-target"
+        staging = transaction / "staged-target"
+        ownership = (
+            mcp_tools_session.bridge_deploy.load_ownership_record(
+                self._project_root,
+                self._target,
+            )
+        )
+        self.assertIsInstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        assert isinstance(
+            ownership,
+            mcp_tools_session.bridge_deploy.BridgeOwnershipRecord,
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual("DEPLOY_REFRESH_FAILED", result["code"])
+        self.assertEqual("promoted", result["data"]["promotion_state"])
+        self.assertTrue(result["data"]["target_complete"])
+        self.assertTrue(result["data"]["ownership_published"])
+        self.assertFalse(result["data"]["backup_retained"])
+        self.assertFalse(result["data"]["transaction_retained"])
+        self.assertEqual(source_manifest.sha256, self._manifest_at(self._target).sha256)
+        self.assertEqual(
+            source_manifest.sha256,
+            result["data"]["manifest_sha256"],
+        )
+        self.assertEqual(source_manifest.sha256, ownership.manifest.sha256)
+        self.assertFalse(transaction.exists())
+        self.assertFalse(backup.exists())
+        self.assertFalse(staging.exists())
+        self._assert_public_redacted(result, secret, str(self._project_root))
 
 
 # ---------------------------------------------------------------------------
@@ -7828,10 +10435,15 @@ class TestCopyAssetTool(unittest.TestCase):
     """Tests for the copy_asset MCP tool."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "copied"}}
+        response = ToolResponse(
+            True,
+            Severity.INFO,
+            "ASSET_COPY_APPLIED",
+            "Asset copy completed.",
+            {"m_name_after": "copied"},
+        )
         mock_orch = MagicMock()
-        mock_orch.copy_asset.return_value = mock_resp
+        mock_orch.copy_asset.return_value = response
 
         server = create_server()
         with patch.object(
@@ -7839,7 +10451,9 @@ class TestCopyAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "copy_asset",
                     {
                         "source_path": "Assets/Mat/A.mat",
@@ -7850,7 +10464,14 @@ class TestCopyAssetTool(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "ASSET_COPY_APPLIED", "copied"),
+            (
+                result["success"],
+                result["code"],
+                result["data"]["m_name_after"],
+            ),
+        )
         mock_orch.copy_asset.assert_called_once_with(
             source_path="Assets/Mat/A.mat",
             dest_path="Assets/Mat/B.mat",
@@ -7886,10 +10507,15 @@ class TestRenameAssetTool(unittest.TestCase):
     """Tests for the rename_asset MCP tool."""
 
     def test_delegates_to_orchestrator(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"m_name_after": "renamed"}}
+        response = ToolResponse(
+            True,
+            Severity.INFO,
+            "ASSET_RENAME_APPLIED",
+            "Asset rename completed.",
+            {"m_name_after": "renamed"},
+        )
         mock_orch = MagicMock()
-        mock_orch.rename_asset.return_value = mock_resp
+        mock_orch.rename_asset.return_value = response
 
         server = create_server()
         with patch.object(
@@ -7897,7 +10523,9 @@ class TestRenameAssetTool(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "rename_asset",
                     {
                         "asset_path": "Assets/Mat/Old.mat",
@@ -7908,7 +10536,14 @@ class TestRenameAssetTool(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "ASSET_RENAME_APPLIED", "renamed"),
+            (
+                result["success"],
+                result["code"],
+                result["data"]["m_name_after"],
+            ),
+        )
         mock_orch.rename_asset.assert_called_once_with(
             asset_path="Assets/Mat/Old.mat",
             new_name="New.mat",
@@ -7944,10 +10579,15 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
     """Tests for delete_asset and delete_assets MCP tools."""
 
     def test_delete_asset_delegates_single_path_as_batch(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        response = ToolResponse(
+            True,
+            Severity.INFO,
+            "ASSET_DELETE_DRY_RUN",
+            "Asset delete plan completed.",
+            {"targets": []},
+        )
         mock_orch = MagicMock()
-        mock_orch.delete_assets.return_value = mock_resp
+        mock_orch.delete_assets.return_value = response
 
         server = create_server()
         with patch.object(
@@ -7955,13 +10595,18 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "delete_asset",
                     {"asset_path": "Assets/Foo.prefab"},
                 )
             )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "ASSET_DELETE_DRY_RUN", []),
+            (result["success"], result["code"], result["data"]["targets"]),
+        )
         mock_orch.delete_assets.assert_called_once_with(
             ["Assets/Foo.prefab"],
             scope=None,
@@ -7971,10 +10616,15 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
         )
 
     def test_delete_assets_defaults_to_dry_run(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"targets": []}}
+        response = ToolResponse(
+            True,
+            Severity.INFO,
+            "ASSET_DELETE_DRY_RUN",
+            "Asset delete plan completed.",
+            {"targets": []},
+        )
         mock_orch = MagicMock()
-        mock_orch.delete_assets.return_value = mock_resp
+        mock_orch.delete_assets.return_value = response
 
         server = create_server()
         with patch.object(
@@ -7982,13 +10632,18 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             "get_orchestrator",
             return_value=mock_orch,
         ):
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "delete_assets",
                     {"asset_paths": ["Assets/Foo.prefab"]},
                 )
             )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "ASSET_DELETE_DRY_RUN", []),
+            (result["success"], result["code"], result["data"]["targets"]),
+        )
         mock_orch.delete_assets.assert_called_once_with(
             ["Assets/Foo.prefab"],
             scope=None,
@@ -7997,18 +10652,31 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
             change_reason=None,
         )
 
-    def test_delete_assets_confirmed_apply_passes_resolved_scope_and_reason(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.to_dict.return_value = {"success": True, "data": {"deleted_paths": []}}
+    def test_delete_assets_confirmed_apply_passes_resolved_scope_and_reason(
+        self,
+    ) -> None:
+        response = ToolResponse(
+            True,
+            Severity.INFO,
+            "ASSET_DELETE_APPLIED",
+            "Asset delete completed.",
+            {"deleted_paths": []},
+        )
         mock_orch = MagicMock()
-        mock_orch.delete_assets.return_value = mock_resp
+        mock_orch.delete_assets.return_value = response
 
         server = create_server()
         with (
             patch.object(ProjectSession, "get_orchestrator", return_value=mock_orch),
-            patch.object(ProjectSession, "resolve_scope", return_value="Assets/Resolved"),
+            patch.object(
+                ProjectSession,
+                "resolve_scope",
+                return_value="Assets/Resolved",
+            ),
         ):
-            result = structured_payload(call_tool_result(server,
+            result = structured_payload(
+                call_tool_result(
+                    server,
                     "delete_assets",
                     {
                         "asset_paths": ["Assets/Foo.prefab"],
@@ -8020,7 +10688,14 @@ class PatchAssetDeleteToolTests(unittest.TestCase):
                 )
             )
 
-        self.assertTrue(result["success"])
+        self.assertEqual(
+            (True, "ASSET_DELETE_APPLIED", []),
+            (
+                result["success"],
+                result["code"],
+                result["data"]["deleted_paths"],
+            ),
+        )
         mock_orch.delete_assets.assert_called_once_with(
             ["Assets/Foo.prefab"],
             scope="Assets/Resolved",

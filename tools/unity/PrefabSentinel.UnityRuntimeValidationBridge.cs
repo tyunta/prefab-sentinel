@@ -16,22 +16,21 @@ namespace PrefabSentinel
     /// compile or ClientSim startup checks, and writes a JSON response file
     /// without exiting the editor process.
     /// </summary>
-    public static class UnityRuntimeValidationBridge
+    public static partial class UnityRuntimeValidationBridge
     {
-        public const int ProtocolVersion = 1;
+        public const int ProtocolVersion = UnityEditorControlBridge.ProtocolVersion;
         private const string DefaultProjectRootName = "project";
 
         /// <summary>All action strings handled by this bridge.</summary>
         public static readonly HashSet<string> SupportedActions = new HashSet<string>
         {
-            "compile_udonsharp",
-            "run_clientsim",
+            "validate_runtime",
         };
 
 
         public static readonly HashSet<string> AsyncActions = new HashSet<string>
         {
-            "run_clientsim",
+            "validate_runtime",
         };
 
         [Serializable]
@@ -45,7 +44,9 @@ namespace PrefabSentinel
             public int timeout_sec = 120;
             public bool confirm = false;
             public string change_reason = string.Empty;
-            public bool allow_dirty_before = false;
+            public string generated_asset_policy = "deny";
+            public bool allow_dirty_program_assets_before_compile = false;
+            public bool allow_dirty_scenes_before_compile = false;
         }
 
         [Serializable]
@@ -69,6 +70,24 @@ namespace PrefabSentinel
             public bool read_only = true;
             public bool executed = false;
             public ClientSimSideEffectReport side_effect_report = null;
+            [SerializeField]
+            internal RuntimeCompileReport compile =
+                new RuntimeCompileReport();
+            [SerializeField]
+            internal RuntimeClientSimReport clientsim =
+                new RuntimeClientSimReport();
+        }
+
+        [Serializable]
+        internal sealed class RuntimeClientSimReport
+        {
+            public bool executed = false;
+            public RuntimeCompileAudit.SceneIdentity[] initial_scene_snapshot =
+                Array.Empty<RuntimeCompileAudit.SceneIdentity>();
+            public SceneSideEffectSnapshot before;
+            public SceneSideEffectSnapshot runtime;
+            public SceneSideEffectSnapshot after;
+            public ClientSimSideEffectReport side_effect_report;
         }
 
         [Serializable]
@@ -117,6 +136,7 @@ namespace PrefabSentinel
         [Serializable]
         public sealed class RuntimeResponse
         {
+            public int protocol_version = ProtocolVersion;
             public bool success = false;
             public string severity = "error";
             public string code = string.Empty;
@@ -187,16 +207,50 @@ namespace PrefabSentinel
                 return;
             }
 
-            if (string.Equals(request.action, "compile_udonsharp", StringComparison.Ordinal))
+            if (!string.Equals(
+                request.action,
+                "validate_runtime",
+                StringComparison.Ordinal))
             {
-                RuntimeResponse compileResponse = ExecuteCompile(request);
-                WriteResponse(responsePath, compileResponse);
+                WriteResponse(
+                    responsePath,
+                    BuildError(
+                        code: "RUN_PROTOCOL_ERROR",
+                        message: $"Unsupported runtime validation action '{request.action}'.",
+                        request: request,
+                        diagnostics: new[]
+                        {
+                            new RuntimeDiagnostic
+                            {
+                                location = "action",
+                                detail = "schema_error",
+                                evidence = request.action ?? string.Empty
+                            }
+                        },
+                        readOnly: true,
+                        executed: false
+                    )
+                );
                 return;
             }
 
-            if (string.Equals(request.action, "run_clientsim", StringComparison.Ordinal))
+            if (string.Equals(
+                request.profile,
+                "compile_only",
+                StringComparison.Ordinal))
             {
-                RuntimeValidationClientSimController.Begin(request, responsePath);
+                WriteResponse(responsePath, ExecuteCompile(request));
+                return;
+            }
+
+            if (string.Equals(
+                request.profile,
+                "clientsim",
+                StringComparison.Ordinal))
+            {
+                RuntimeValidationClientSimController.Begin(
+                    request,
+                    responsePath);
                 return;
             }
 
@@ -204,15 +258,15 @@ namespace PrefabSentinel
                 responsePath,
                 BuildError(
                     code: "RUN_PROTOCOL_ERROR",
-                    message: $"Unsupported runtime validation action '{request.action}'.",
+                    message: $"Unsupported runtime validation profile '{request.profile}'.",
                     request: request,
                     diagnostics: new[]
                     {
                         new RuntimeDiagnostic
                         {
-                            location = "action",
+                            location = "profile",
                             detail = "schema_error",
-                            evidence = request.action ?? string.Empty
+                            evidence = request.profile ?? string.Empty
                         }
                     },
                     readOnly: true,
@@ -276,104 +330,73 @@ namespace PrefabSentinel
             }
         }
 
-        internal static RuntimeResponse ExecuteCompile(RuntimeRequest request)
+        internal static RuntimeResponse ExecuteCompile(
+            RuntimeRequest request)
+        {
+            CompilePreflightResult preflight;
+            RuntimeResponse preflightFailure =
+                TryPrepareCompile(request, out preflight);
+            if (preflightFailure != null)
+            {
+                return preflightFailure;
+            }
+            return BuildCompileResponse(
+                request,
+                ExecuteAuthorizedCompile(request, preflight));
+        }
+
+        internal static RuntimeResponse TryPrepareCompile(
+            RuntimeRequest request,
+            out CompilePreflightResult preflight)
         {
             try
             {
-                Type programAssetType = FindType("UdonSharp.UdonSharpProgramAsset, UdonSharp.Editor");
-                if (programAssetType == null)
-                {
-                    return BuildSkip(
-                        code: "RUN_COMPILE_SKIPPED",
-                        message: "UdonSharp editor assembly was not found; compile check skipped.",
-                        request: request
-                    );
-                }
-
-                MethodInfo getAllPrograms = programAssetType.GetMethod("GetAllUdonSharpPrograms", BindingFlags.Public | BindingFlags.Static);
-                MethodInfo compileAllPrograms = programAssetType.GetMethod("CompileAllCsPrograms", BindingFlags.Public | BindingFlags.Static);
-                MethodInfo anyCompileErrors = programAssetType.GetMethod("AnyUdonSharpScriptHasError", BindingFlags.Public | BindingFlags.Static);
-                if (getAllPrograms == null || compileAllPrograms == null || anyCompileErrors == null)
-                {
-                    return BuildSkip(
-                        code: "RUN_COMPILE_SKIPPED",
-                        message: "Required UdonSharp compile APIs were not found; compile check skipped.",
-                        request: request
-                    );
-                }
-
-                Array programs = getAllPrograms.Invoke(null, null) as Array;
-                int programCount = programs == null ? 0 : programs.Length;
-                if (programCount == 0)
-                {
-                    return BuildSuccess(
-                        code: "RUN_COMPILE_OK",
-                        message: "No UdonSharp programs were found; compile check completed.",
-                        request: request,
-                        udonProgramCount: 0
-                    );
-                }
-
-                Type compilerType = FindType("UdonSharp.Compiler.UdonSharpCompilerV1, UdonSharp.Editor");
-                MethodInfo waitForCompile = compilerType == null
-                    ? null
-                    : compilerType.GetMethod("WaitForCompile", BindingFlags.NonPublic | BindingFlags.Static);
-                MethodInfo compileSync = compilerType == null
-                    ? null
-                    : compilerType.GetMethod("CompileSync", BindingFlags.Public | BindingFlags.Static);
-
-                AssetDatabase.Refresh();
-                compileAllPrograms.Invoke(null, new object[] { true, true });
-                waitForCompile?.Invoke(null, null);
-
-                bool hasErrors = Convert.ToBoolean(anyCompileErrors.Invoke(null, null));
-                if (hasErrors && compileSync != null)
-                {
-                    compileSync.Invoke(null, new object[] { null });
-                    hasErrors = Convert.ToBoolean(anyCompileErrors.Invoke(null, null));
-                }
-
-                AssetDatabase.Refresh();
-                if (hasErrors)
-                {
-                    return BuildError(
-                        code: "RUN_COMPILE_FAILED",
-                        message: "UdonSharp compile reported errors.",
-                        request: request,
-                        diagnostics: Array.Empty<RuntimeDiagnostic>(),
-                        readOnly: false,
-                        executed: true,
-                        udonProgramCount: programCount
-                    );
-                }
-
-                return BuildSuccess(
-                    code: "RUN_COMPILE_OK",
-                    message: "UdonSharp compile completed via the Editor Bridge.",
-                    request: request,
-                    udonProgramCount: programCount
-                );
+                preflight = CaptureCompilePreflight(request);
             }
             catch (Exception ex)
             {
-                Exception inner = (ex as TargetInvocationException)?.InnerException ?? ex;
-                return BuildError(
-                    code: "RUN_COMPILE_FAILED",
-                    message: $"UdonSharp compile threw an exception: {inner.Message}",
-                    request: request,
-                    diagnostics: new[]
+                preflight = new CompilePreflightResult
+                {
+                    InventoryStable = false,
+                    Before = new RuntimeCompileAudit.Snapshot
                     {
-                        new RuntimeDiagnostic
-                        {
-                            location = "compile_udonsharp",
-                            detail = "exception",
-                            evidence = inner.ToString()
-                        }
+                        inventory_stable = false,
                     },
-                    readOnly: false,
-                    executed: true
-                );
+                };
+                return BuildCompilePreflightFailure(
+                    request,
+                    preflight,
+                    ex.ToString());
             }
+
+            RuntimeCompileAudit.PreflightDecision decision;
+            try
+            {
+                RuntimeCompileAudit.GeneratedAssetPolicy policy =
+                    RuntimeCompileAudit.ParsePolicy(
+                        request.generated_asset_policy);
+                decision = RuntimeCompileAudit.EvaluatePreflight(
+                    preflight.Before,
+                    policy,
+                    request.allow_dirty_program_assets_before_compile,
+                    request.allow_dirty_scenes_before_compile);
+            }
+            catch (Exception ex)
+            {
+                return BuildCompilePreflightFailure(
+                    request,
+                    preflight,
+                    ex.ToString());
+            }
+
+            if (!decision.compile_allowed)
+            {
+                return BuildCompilePreflightDenied(
+                    request,
+                    preflight,
+                    decision);
+            }
+            return null;
         }
 
         private static RuntimeData BuildData(
@@ -578,6 +601,17 @@ namespace PrefabSentinel
         private const string WaitingForClientSimPhase = "waiting_for_clientsim";
         private const string ExitingPlayModePhase = "exiting_play_mode";
 
+        internal sealed class PreparedClientSim
+        {
+            internal string SceneAssetPath = string.Empty;
+            internal string TargetSceneGuid = string.Empty;
+            internal bool PreviousStartSceneWasNull;
+            internal string PreviousStartSceneGuid = string.Empty;
+            internal double OperationDeadline;
+            internal RuntimeCompileAudit.SceneIdentity[] InitialScenes =
+                Array.Empty<RuntimeCompileAudit.SceneIdentity>();
+        }
+
         [Serializable]
         private sealed class OperationState
         {
@@ -596,8 +630,13 @@ namespace PrefabSentinel
             public bool terminalClientSimReady = false;
             public bool terminalReadOnly = false;
             public bool terminalExecuted = true;
+            public bool clientSimExecuted = false;
             public UnityRuntimeValidationBridge.RuntimeDiagnostic[] terminalDiagnostics =
                 Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>();
+            public UnityRuntimeValidationBridge.RuntimeCompileReport compileReport =
+                new UnityRuntimeValidationBridge.RuntimeCompileReport();
+            public RuntimeCompileAudit.SceneIdentity[] initialSceneSnapshot =
+                Array.Empty<RuntimeCompileAudit.SceneIdentity>();
             public UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot;
             public UnityRuntimeValidationBridge.SceneSideEffectSnapshot runtimeSnapshot;
         }
@@ -610,6 +649,13 @@ namespace PrefabSentinel
             public string targetSceneGuid = string.Empty;
             public string targetScenePath = string.Empty;
             public string responsePath = string.Empty;
+            public bool clientSimExecuted = false;
+            public UnityRuntimeValidationBridge.RuntimeCompileReport compileReport =
+                new UnityRuntimeValidationBridge.RuntimeCompileReport();
+            public RuntimeCompileAudit.SceneIdentity[] initialSceneSnapshot =
+                Array.Empty<RuntimeCompileAudit.SceneIdentity>();
+            public UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot;
+            public UnityRuntimeValidationBridge.SceneSideEffectSnapshot runtimeSnapshot;
         }
 
         static RuntimeValidationClientSimController()
@@ -623,68 +669,172 @@ namespace PrefabSentinel
             string responsePath)
         {
             string safeResponsePath = responsePath ?? string.Empty;
-            if (request == null)
+            PreparedClientSim prepared;
+            UnityRuntimeValidationBridge.RuntimeResponse prepareFailure;
+            if (!TryPrepareClientSim(
+                    request,
+                    out prepared,
+                    out prepareFailure))
             {
-                WriteImmediate(
-                    safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "RUN_PROTOCOL_ERROR",
-                        message: "ClientSim request is missing.",
-                        request: new UnityRuntimeValidationBridge.RuntimeRequest(),
-                        diagnostics: DiagFrom("request", "schema_error", "request was null"),
-                        readOnly: true,
-                        executed: false));
+                WriteImmediate(safeResponsePath, prepareFailure);
                 return;
             }
 
-            if (!string.Equals(request.profile, "clientsim", StringComparison.Ordinal)
-                || !request.confirm
-                || string.IsNullOrWhiteSpace(request.change_reason))
+            UnityRuntimeValidationBridge.CompilePreflightResult compilePreflight;
+            UnityRuntimeValidationBridge.RuntimeResponse compilePreflightFailure =
+                UnityRuntimeValidationBridge.TryPrepareCompile(
+                    request,
+                    out compilePreflight);
+            bool initialSceneDirty =
+                prepared.InitialScenes.Length == 1
+                && prepared.InitialScenes[0].dirty;
+            RuntimeValidationTransactionOrder.Decision preCompileDecision =
+                RuntimeValidationTransactionOrder.Decide(
+                    clientSimRequested: true,
+                    reportAndAuditValid: true,
+                    compileInventoryValid: compilePreflightFailure == null,
+                    clientSimPreflightValid: true,
+                    initialSceneDirty: initialSceneDirty,
+                    allowInitialDirtyScene:
+                        request.allow_dirty_scenes_before_compile,
+                    compileSucceeded: false,
+                    sceneDirtyAfterCompile: false);
+            if (!preCompileDecision.compile_allowed)
             {
                 WriteImmediate(
                     safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "CLIENTSIM_CONFIRM_REQUIRED",
-                        message: "ClientSim requires profile=clientsim, confirm=true, and a non-empty change_reason.",
-                        request: request,
-                        diagnostics: DiagFrom(
-                            "confirm",
-                            "audit_required",
-                            "profile=clientsim, confirm=true, and change_reason are required"),
-                        readOnly: true,
-                        executed: false));
+                    AttachTransactionEvidence(
+                        compilePreflightFailure,
+                        compilePreflightFailure.data.compile,
+                        prepared.InitialScenes,
+                        clientSimExecuted: false,
+                        beforeSnapshot: null,
+                        runtimeSnapshot: null,
+                        afterSnapshot: null,
+                        sideEffectReport: null));
                 return;
+            }
+
+            UnityRuntimeValidationBridge.RuntimeCompileReport compileReport =
+                UnityRuntimeValidationBridge.ExecuteAuthorizedCompile(
+                    request,
+                    compilePreflight);
+            UnityRuntimeValidationBridge.RuntimeResponse compileResponse =
+                UnityRuntimeValidationBridge.BuildCompileResponse(
+                    request,
+                    compileReport);
+            Scene postCompileScene = SceneManager.GetActiveScene();
+            bool sceneDirtyAfterCompile =
+                postCompileScene.IsValid()
+                && postCompileScene.isLoaded
+                && postCompileScene.isDirty;
+            RuntimeValidationTransactionOrder.Decision postCompileDecision =
+                RuntimeValidationTransactionOrder.Decide(
+                    clientSimRequested: true,
+                    reportAndAuditValid: true,
+                    compileInventoryValid: true,
+                    clientSimPreflightValid: true,
+                    initialSceneDirty: initialSceneDirty,
+                    allowInitialDirtyScene:
+                        request.allow_dirty_scenes_before_compile,
+                    compileSucceeded: compileReport.success,
+                    sceneDirtyAfterCompile: sceneDirtyAfterCompile);
+            if (!postCompileDecision.clientsim_allowed)
+            {
+                WriteImmediate(
+                    safeResponsePath,
+                    AttachTransactionEvidence(
+                        compileResponse,
+                        compileReport,
+                        prepared.InitialScenes,
+                        clientSimExecuted: false,
+                        beforeSnapshot: null,
+                        runtimeSnapshot: null,
+                        afterSnapshot: null,
+                        sideEffectReport: null));
+                return;
+            }
+
+            BeginPreparedClientSim(
+                request,
+                safeResponsePath,
+                prepared,
+                compileReport);
+        }
+
+        internal static bool TryPrepareClientSim(
+            UnityRuntimeValidationBridge.RuntimeRequest request,
+            out PreparedClientSim prepared,
+            out UnityRuntimeValidationBridge.RuntimeResponse failure)
+        {
+            prepared = null;
+            failure = null;
+            if (request == null)
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "RUN_PROTOCOL_ERROR",
+                    message: "ClientSim request is missing.",
+                    request: new UnityRuntimeValidationBridge.RuntimeRequest(),
+                    diagnostics: DiagFrom(
+                        "request",
+                        "schema_error",
+                        "request was null"),
+                    readOnly: true,
+                    executed: false);
+                return false;
             }
 
             double operationDeadline =
-                EditorApplication.timeSinceStartup + Math.Max(request.timeout_sec, 1);
+                EditorApplication.timeSinceStartup
+                + Math.Max(request.timeout_sec, 1);
+            if (!string.Equals(
+                    request.profile,
+                    "clientsim",
+                    StringComparison.Ordinal)
+                || !request.confirm
+                || string.IsNullOrWhiteSpace(request.change_reason))
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_CONFIRM_REQUIRED",
+                    message: "ClientSim requires profile=clientsim, confirm=true, and a non-empty change_reason.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "confirm",
+                        "audit_required",
+                        "profile=clientsim, confirm=true, and change_reason are required"),
+                    readOnly: true,
+                    executed: false);
+                return false;
+            }
 
             if (HasPersistedState())
             {
-                WriteImmediate(
-                    safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "CLIENTSIM_ALREADY_RUNNING",
-                        message: "Another ClientSim validation operation already owns Play Mode cleanup.",
-                        request: request,
-                        diagnostics: DiagFrom("run_clientsim", "busy", "persisted operation or restoration lease exists"),
-                        readOnly: true,
-                        executed: false));
-                return;
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_ALREADY_RUNNING",
+                    message: "Another ClientSim validation operation already owns Play Mode cleanup.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "busy",
+                        "persisted operation or restoration lease exists"),
+                    readOnly: true,
+                    executed: false);
+                return false;
             }
 
             if (EditorApplication.isPlayingOrWillChangePlaymode)
             {
-                WriteImmediate(
-                    safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "CLIENTSIM_EDITOR_NOT_READY",
-                        message: "ClientSim validation requires Unity to be in stable Edit Mode.",
-                        request: request,
-                        diagnostics: DiagFrom("run_clientsim", "editor_state", "Unity is playing or changing Play Mode"),
-                        readOnly: true,
-                        executed: false));
-                return;
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_EDITOR_NOT_READY",
+                    message: "ClientSim validation requires Unity to be in stable Edit Mode.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "editor_state",
+                        "Unity is playing or changing Play Mode"),
+                    readOnly: true,
+                    executed: false);
+                return false;
             }
 
             string sceneAssetPath;
@@ -694,79 +844,99 @@ namespace PrefabSentinel
                     out sceneAssetPath,
                     out sceneError))
             {
-                WriteImmediate(
-                    safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "RUN002",
-                        message: "ClientSim scene path is invalid.",
-                        request: request,
-                        diagnostics: DiagFrom("scene_path", "schema_error", sceneError),
-                        readOnly: true,
-                        executed: false));
-                return;
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "RUN002",
+                    message: "ClientSim scene path is invalid.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "scene_path",
+                        "schema_error",
+                        sceneError),
+                    readOnly: true,
+                    executed: false);
+                return false;
             }
 
             Scene activeScene = SceneManager.GetActiveScene();
             if (SceneManager.sceneCount != 1
                 || !activeScene.IsValid()
                 || !activeScene.isLoaded
-                || !string.Equals(activeScene.path, sceneAssetPath, StringComparison.Ordinal))
+                || !string.Equals(
+                    activeScene.path,
+                    sceneAssetPath,
+                    StringComparison.Ordinal))
             {
-                WriteImmediate(
-                    safeResponsePath,
-                    UnityRuntimeValidationBridge.BuildError(
-                        code: "CLIENTSIM_ACTIVE_SCENE_REQUIRED",
-                        message: "ClientSim requires the requested scene to be the only loaded active scene.",
-                        request: request,
-                        diagnostics: DiagFrom(
-                            "scene_path",
-                            "editor_state",
-                            $"requested={sceneAssetPath}; active={activeScene.path}; loaded_scene_count={SceneManager.sceneCount}"),
-                        readOnly: true,
-                        executed: false));
-                return;
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_ACTIVE_SCENE_REQUIRED",
+                    message: "ClientSim requires the requested scene to be the only loaded active scene.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "scene_path",
+                        "editor_state",
+                        $"requested={sceneAssetPath}; active={activeScene.path}; loaded_scene_count={SceneManager.sceneCount}"),
+                    readOnly: true,
+                    executed: false);
+                return false;
             }
 
-            UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot =
-                CaptureSceneSnapshot(activeScene);
-            if (beforeSnapshot.Dirty && !request.allow_dirty_before)
+            var initialScene = new RuntimeCompileAudit.SceneIdentity
             {
-                WriteImmediate(
-                    safeResponsePath,
+                path = activeScene.path,
+                handle = activeScene.handle,
+                dirty = activeScene.isDirty,
+                attribution_unknown =
+                    activeScene.isDirty
+                    && request.allow_dirty_scenes_before_compile
+                        ? new[]
+                        {
+                            $"dirty_scene_before_compile:{activeScene.path}",
+                        }
+                        : Array.Empty<string>(),
+            };
+            RuntimeCompileAudit.SceneIdentity[] initialScenes =
+                new[] { initialScene };
+            if (initialScene.dirty
+                && !request.allow_dirty_scenes_before_compile)
+            {
+                failure = AttachPreparedPrecompileFailure(
                     UnityRuntimeValidationBridge.BuildError(
                         code: "CLIENTSIM_DIRTY_SCENE",
                         message: "ClientSim validation refused to run because the active scene is already dirty.",
                         request: request,
-                        diagnostics: DiagFrom("scene_path", "dirty_scene", sceneAssetPath),
+                        diagnostics: DiagFrom(
+                            "scene_path",
+                            "dirty_scene",
+                            sceneAssetPath),
                         readOnly: true,
-                        executed: false,
-                        sideEffectReport: BuildSideEffectReport(
-                            sceneAssetPath,
-                            beforeSnapshot,
-                            null,
-                            beforeSnapshot)));
-                return;
+                        executed: false),
+                    initialScenes);
+                return false;
             }
 
             UnityRuntimeValidationBridge.RuntimeResponse preflightFailure =
                 TryPreflightClientSim(request);
             if (preflightFailure != null)
             {
-                WriteImmediate(safeResponsePath, preflightFailure);
-                return;
+                failure = AttachPreparedPrecompileFailure(
+                    preflightFailure,
+                    initialScenes);
+                return false;
             }
 
-            SceneAsset previousStartScene = EditorSceneManager.playModeStartScene;
+            SceneAsset previousStartScene =
+                EditorSceneManager.playModeStartScene;
             string previousStartScenePath = previousStartScene == null
                 ? string.Empty
                 : AssetDatabase.GetAssetPath(previousStartScene);
-            string previousStartSceneGuid = string.IsNullOrEmpty(previousStartScenePath)
-                ? string.Empty
-                : AssetDatabase.AssetPathToGUID(previousStartScenePath);
-            if (previousStartScene != null && string.IsNullOrEmpty(previousStartSceneGuid))
+            string previousStartSceneGuid =
+                string.IsNullOrEmpty(previousStartScenePath)
+                    ? string.Empty
+                    : AssetDatabase.AssetPathToGUID(
+                        previousStartScenePath);
+            if (previousStartScene != null
+                && string.IsNullOrEmpty(previousStartSceneGuid))
             {
-                WriteImmediate(
-                    safeResponsePath,
+                failure = AttachPreparedPrecompileFailure(
                     UnityRuntimeValidationBridge.BuildError(
                         code: "CLIENTSIM_START_SCENE_UNRESTORABLE",
                         message: "The existing Play Mode start scene cannot be restored by GUID.",
@@ -776,69 +946,141 @@ namespace PrefabSentinel
                             "restore_preflight",
                             previousStartScenePath),
                         readOnly: true,
-                        executed: false));
-                return;
+                        executed: false),
+                    initialScenes);
+                return false;
             }
 
-            string targetSceneGuid = AssetDatabase.AssetPathToGUID(sceneAssetPath);
+            string targetSceneGuid =
+                AssetDatabase.AssetPathToGUID(sceneAssetPath);
             if (string.IsNullOrEmpty(targetSceneGuid))
             {
-                WriteImmediate(
-                    safeResponsePath,
+                failure = AttachPreparedPrecompileFailure(
                     UnityRuntimeValidationBridge.BuildError(
                         code: "RUN002",
                         message: "The ClientSim target scene has no asset GUID.",
                         request: request,
-                        diagnostics: DiagFrom("scene_path", "asset_identity", sceneAssetPath),
+                        diagnostics: DiagFrom(
+                            "scene_path",
+                            "asset_identity",
+                            sceneAssetPath),
                         readOnly: true,
-                        executed: false));
-                return;
+                        executed: false),
+                    initialScenes);
+                return false;
             }
 
             if (EditorApplication.timeSinceStartup >= operationDeadline)
             {
-                WriteImmediate(
-                    safeResponsePath,
+                failure = AttachPreparedPrecompileFailure(
                     UnityRuntimeValidationBridge.BuildError(
                         code: "CLIENTSIM_PREFLIGHT_TIMEOUT",
-                        message: "ClientSim preflight exceeded the operation deadline before Play Mode was entered.",
+                        message: "ClientSim preflight exceeded the operation deadline before compile.",
                         request: request,
                         diagnostics: DiagFrom(
-                            "run_clientsim",
+                            "validate_runtime",
                             "timeout",
                             $"deadline={operationDeadline}"),
                         readOnly: true,
-                        executed: false,
-                        sideEffectReport: BuildSideEffectReport(
-                            sceneAssetPath,
-                            beforeSnapshot,
-                            null,
-                            beforeSnapshot)));
+                        executed: false),
+                    initialScenes);
+                return false;
+            }
+
+            prepared = new PreparedClientSim
+            {
+                SceneAssetPath = sceneAssetPath,
+                TargetSceneGuid = targetSceneGuid,
+                PreviousStartSceneWasNull =
+                    previousStartScene == null,
+                PreviousStartSceneGuid =
+                    previousStartSceneGuid,
+                OperationDeadline = operationDeadline,
+                InitialScenes = initialScenes,
+            };
+            return true;
+        }
+
+        private static UnityRuntimeValidationBridge.RuntimeResponse
+            AttachPreparedPrecompileFailure(
+                UnityRuntimeValidationBridge.RuntimeResponse failure,
+                RuntimeCompileAudit.SceneIdentity[] initialScenes)
+        {
+            return AttachTransactionEvidence(
+                failure,
+                new UnityRuntimeValidationBridge.RuntimeCompileReport(),
+                initialScenes,
+                clientSimExecuted: false,
+                beforeSnapshot: null,
+                runtimeSnapshot: null,
+                afterSnapshot: null,
+                sideEffectReport: null);
+        }
+
+        internal static void BeginPreparedClientSim(
+            UnityRuntimeValidationBridge.RuntimeRequest request,
+            string responsePath,
+            PreparedClientSim prepared,
+            UnityRuntimeValidationBridge.RuntimeCompileReport compileReport)
+        {
+            Scene activeScene;
+            UnityRuntimeValidationBridge.RuntimeResponse revalidationFailure;
+            if (!TryRevalidatePreparedClientSim(
+                    request,
+                    prepared,
+                    out activeScene,
+                    out revalidationFailure))
+            {
+                WriteImmediate(
+                    responsePath,
+                    AttachTransactionEvidence(
+                        revalidationFailure,
+                        compileReport,
+                        prepared?.InitialScenes,
+                        clientSimExecuted: false,
+                        beforeSnapshot: null,
+                        runtimeSnapshot: null,
+                        afterSnapshot: null,
+                        sideEffectReport: null));
                 return;
             }
 
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot =
+                CaptureSceneSnapshot(activeScene);
             var lease = new RestorationLease
             {
-                previousStartSceneWasNull = previousStartScene == null,
-                previousStartSceneGuid = previousStartSceneGuid,
-                targetSceneGuid = targetSceneGuid,
-                targetScenePath = sceneAssetPath,
-                responsePath = safeResponsePath,
+                previousStartSceneWasNull =
+                    prepared.PreviousStartSceneWasNull,
+                previousStartSceneGuid =
+                    prepared.PreviousStartSceneGuid,
+                targetSceneGuid = prepared.TargetSceneGuid,
+                targetScenePath = prepared.SceneAssetPath,
+                responsePath = responsePath,
+                clientSimExecuted = false,
+                compileReport = compileReport,
+                initialSceneSnapshot = prepared.InitialScenes,
+                beforeSnapshot = beforeSnapshot,
             };
-            EnsureSubscribed();
-            SaveRestorationLease(lease);
-
             var state = new OperationState
             {
                 request = request,
-                responsePath = safeResponsePath,
-                sceneAssetPath = sceneAssetPath,
+                responsePath = responsePath,
+                sceneAssetPath = prepared.SceneAssetPath,
                 phase = EnteringPlayModePhase,
-                operationDeadline = operationDeadline,
+                operationDeadline = prepared.OperationDeadline,
+                clientSimExecuted = false,
+                compileReport = compileReport,
+                initialSceneSnapshot = prepared.InitialScenes,
                 beforeSnapshot = beforeSnapshot,
             };
+            EnsureSubscribed();
+            SaveRestorationLease(lease);
             SaveOperation(state);
 
+            state.clientSimExecuted = true;
+            lease.clientSimExecuted = true;
+            SaveRestorationLease(lease);
+            SaveOperation(state);
             try
             {
                 EditorSceneManager.playModeStartScene = null;
@@ -851,12 +1093,175 @@ namespace PrefabSentinel
                     success: false,
                     code: "CLIENTSIM_ENTER_PLAY_MODE_FAILED",
                     message: "Unity failed to enter Play Mode for ClientSim validation.",
-                    diagnostics: DiagFrom("run_clientsim", "exception", ex.ToString()),
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "exception",
+                        ex.ToString()),
                     clientSimReady: false,
                     readOnly: false,
                     executed: true);
                 Finish(state);
             }
+        }
+
+        private static bool TryRevalidatePreparedClientSim(
+            UnityRuntimeValidationBridge.RuntimeRequest request,
+            PreparedClientSim prepared,
+            out Scene activeScene,
+            out UnityRuntimeValidationBridge.RuntimeResponse failure)
+        {
+            activeScene = default(Scene);
+            failure = null;
+            if (prepared == null
+                || prepared.InitialScenes == null
+                || prepared.InitialScenes.Length != 1)
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_STATE_INVALID",
+                    message: "Prepared ClientSim identity evidence is incomplete.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "state",
+                        "prepared ClientSim identity was missing"),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            if (HasPersistedState())
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_ALREADY_RUNNING",
+                    message: "Another ClientSim validation operation acquired cleanup ownership during compile.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "busy",
+                        "persisted operation or restoration lease exists"),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_EDITOR_NOT_READY",
+                    message: "Unity left stable Edit Mode during compile.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "editor_state",
+                        "Unity is playing or changing Play Mode"),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            if (EditorApplication.timeSinceStartup
+                >= prepared.OperationDeadline)
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_PREFLIGHT_TIMEOUT",
+                    message: "The compound runtime deadline expired after compile and before Play Mode.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "timeout",
+                        $"deadline={prepared.OperationDeadline}"),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            activeScene = SceneManager.GetActiveScene();
+            RuntimeCompileAudit.SceneIdentity initialScene =
+                prepared.InitialScenes[0];
+            if (SceneManager.sceneCount != 1
+                || !activeScene.IsValid()
+                || !activeScene.isLoaded
+                || !string.Equals(
+                    activeScene.path,
+                    prepared.SceneAssetPath,
+                    StringComparison.Ordinal)
+                || activeScene.handle != initialScene.handle)
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_ACTIVE_SCENE_REQUIRED",
+                    message: "The requested sole active Scene identity changed during compile.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "scene_path",
+                        "editor_state",
+                        $"requested={prepared.SceneAssetPath}; active={activeScene.path}; loaded_scene_count={SceneManager.sceneCount}"),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            string targetSceneGuid =
+                AssetDatabase.AssetPathToGUID(activeScene.path);
+            if (!string.Equals(
+                    targetSceneGuid,
+                    prepared.TargetSceneGuid,
+                    StringComparison.Ordinal))
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "RUN002",
+                    message: "The ClientSim target Scene identity changed during compile.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "scene_path",
+                        "asset_identity",
+                        activeScene.path),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            SceneAsset currentStartScene =
+                EditorSceneManager.playModeStartScene;
+            bool currentStartSceneWasNull =
+                currentStartScene == null;
+            string currentStartScenePath =
+                currentStartSceneWasNull
+                    ? string.Empty
+                    : AssetDatabase.GetAssetPath(
+                        currentStartScene);
+            string currentStartSceneGuid =
+                string.IsNullOrEmpty(currentStartScenePath)
+                    ? string.Empty
+                    : AssetDatabase.AssetPathToGUID(
+                        currentStartScenePath);
+            if (currentStartSceneWasNull
+                    != prepared.PreviousStartSceneWasNull
+                || !string.Equals(
+                    currentStartSceneGuid,
+                    prepared.PreviousStartSceneGuid,
+                    StringComparison.Ordinal))
+            {
+                failure = UnityRuntimeValidationBridge.BuildError(
+                    code: "CLIENTSIM_START_SCENE_UNRESTORABLE",
+                    message: "The Play Mode start Scene changed during compile.",
+                    request: request,
+                    diagnostics: DiagFrom(
+                        "playModeStartScene",
+                        "restore_preflight",
+                        currentStartScenePath),
+                    readOnly: false,
+                    executed: false);
+                return false;
+            }
+
+            UnityRuntimeValidationBridge.RuntimeResponse preflightFailure =
+                TryPreflightClientSim(request);
+            if (preflightFailure != null)
+            {
+                failure = preflightFailure;
+                return false;
+            }
+            return true;
         }
 
         private static UnityRuntimeValidationBridge.RuntimeResponse TryPreflightClientSim(
@@ -1306,11 +1711,32 @@ namespace PrefabSentinel
             state.terminalCode = code ?? string.Empty;
             state.terminalMessage = message ?? string.Empty;
             state.terminalDiagnostics =
-                diagnostics ?? Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>();
+                diagnostics
+                ?? Array.Empty<UnityRuntimeValidationBridge.RuntimeDiagnostic>();
             state.terminalClientSimReady = clientSimReady;
             state.terminalReadOnly = readOnly;
             state.terminalExecuted = executed;
             SaveOperation(state);
+            PersistLeaseEvidence(state);
+        }
+
+        private static void PersistLeaseEvidence(
+            OperationState state)
+        {
+            RestorationLease lease =
+                LoadRestorationLease(out _);
+            if (lease == null)
+            {
+                return;
+            }
+            lease.clientSimExecuted =
+                state.clientSimExecuted;
+            lease.compileReport = state.compileReport;
+            lease.initialSceneSnapshot =
+                state.initialSceneSnapshot;
+            lease.beforeSnapshot = state.beforeSnapshot;
+            lease.runtimeSnapshot = state.runtimeSnapshot;
+            SaveRestorationLease(lease);
         }
 
         private static void Finish(OperationState state)
@@ -1329,7 +1755,10 @@ namespace PrefabSentinel
                     success: false,
                     code: "CLIENTSIM_RESTORE_FAILED",
                     message: "ClientSim restoration lease is missing or invalid.",
-                    diagnostics: DiagFrom("playModeStartScene", "restore_error", leaseError),
+                    diagnostics: DiagFrom(
+                        "playModeStartScene",
+                        "restore_error",
+                        leaseError),
                     clientSimReady: false,
                     readOnly: false,
                     executed: true);
@@ -1379,7 +1808,10 @@ namespace PrefabSentinel
                     success: false,
                     code: "CLIENTSIM_STATE_INVALID",
                     message: "ClientSim reached cleanup without a terminal outcome.",
-                    diagnostics: DiagFrom("run_clientsim", "state", state.phase ?? string.Empty),
+                    diagnostics: DiagFrom(
+                        "validate_runtime",
+                        "state",
+                        state.phase ?? string.Empty),
                     clientSimReady: false,
                     readOnly: false,
                     executed: true);
@@ -1391,7 +1823,8 @@ namespace PrefabSentinel
                         code: state.terminalCode,
                         message: state.terminalMessage,
                         request: state.request,
-                        clientSimReady: state.terminalClientSimReady,
+                        clientSimReady:
+                            state.terminalClientSimReady,
                         sideEffectReport: report)
                     : UnityRuntimeValidationBridge.BuildError(
                         code: state.terminalCode,
@@ -1401,6 +1834,15 @@ namespace PrefabSentinel
                         readOnly: state.terminalReadOnly,
                         executed: state.terminalExecuted,
                         sideEffectReport: report);
+            response = AttachTransactionEvidence(
+                response,
+                state.compileReport,
+                state.initialSceneSnapshot,
+                state.clientSimExecuted,
+                state.beforeSnapshot,
+                state.runtimeSnapshot,
+                afterSnapshot,
+                report);
 
             SaveOperation(state);
             bool responsePublished = File.Exists(state.responsePath)
@@ -1453,29 +1895,57 @@ namespace PrefabSentinel
             string evidence)
         {
             string restoreError;
-            bool restored = RestorePlayModeStartScene(lease, out restoreError);
+            bool restored =
+                RestorePlayModeStartScene(lease, out restoreError);
             if (!restored)
             {
                 return;
             }
 
-            var request = new UnityRuntimeValidationBridge.RuntimeRequest
-            {
-                action = "run_clientsim",
-                scene_path = lease.targetScenePath,
-                profile = "clientsim",
-            };
+            var request =
+                new UnityRuntimeValidationBridge.RuntimeRequest
+                {
+                    action = "validate_runtime",
+                    scene_path = lease.targetScenePath,
+                    profile = "clientsim",
+                };
+            Scene activeScene = SceneManager.GetActiveScene();
+            UnityRuntimeValidationBridge.SceneSideEffectSnapshot afterSnapshot =
+                activeScene.IsValid()
+                && activeScene.isLoaded
+                && string.Equals(
+                    activeScene.path,
+                    lease.targetScenePath,
+                    StringComparison.Ordinal)
+                    ? CaptureSceneSnapshot(activeScene)
+                    : null;
+            UnityRuntimeValidationBridge.ClientSimSideEffectReport report =
+                BuildSideEffectReport(
+                    lease.targetScenePath,
+                    lease.beforeSnapshot,
+                    lease.runtimeSnapshot,
+                    afterSnapshot);
             UnityRuntimeValidationBridge.RuntimeResponse response =
                 UnityRuntimeValidationBridge.BuildError(
                     code: "CLIENTSIM_STATE_CORRUPT",
                     message: "ClientSim operation state was corrupt; editor state was restored.",
                     request: request,
                     diagnostics: DiagFrom(
-                        "run_clientsim",
+                        "validate_runtime",
                         "state",
                         evidence),
                     readOnly: false,
-                    executed: true);
+                    executed: lease.clientSimExecuted,
+                    sideEffectReport: report);
+            response = AttachTransactionEvidence(
+                response,
+                lease.compileReport,
+                lease.initialSceneSnapshot,
+                lease.clientSimExecuted,
+                lease.beforeSnapshot,
+                lease.runtimeSnapshot,
+                afterSnapshot,
+                report);
 
             bool responsePublished = File.Exists(lease.responsePath)
                 || UnityRuntimeValidationBridge.TryWriteResponseAtomically(
@@ -1537,21 +2007,28 @@ namespace PrefabSentinel
         private static OperationState LoadOperation(out string error)
         {
             error = string.Empty;
-            string json = SessionState.GetString(OperationStateKey, string.Empty);
+            string json = SessionState.GetString(
+                OperationStateKey,
+                string.Empty);
             if (string.IsNullOrEmpty(json))
             {
                 return null;
             }
             try
             {
-                OperationState state = JsonUtility.FromJson<OperationState>(json);
+                OperationState state =
+                    JsonUtility.FromJson<OperationState>(json);
                 if (state == null
                     || state.request == null
                     || string.IsNullOrEmpty(state.responsePath)
                     || string.IsNullOrEmpty(state.sceneAssetPath)
-                    || string.IsNullOrEmpty(state.phase))
+                    || string.IsNullOrEmpty(state.phase)
+                    || state.compileReport == null
+                    || state.initialSceneSnapshot == null
+                    || state.beforeSnapshot == null)
                 {
-                    error = "ClientSim operation record is incomplete.";
+                    error =
+                        "ClientSim operation record is incomplete.";
                     return null;
                 }
                 return state;
@@ -1570,7 +2047,8 @@ namespace PrefabSentinel
                 JsonUtility.ToJson(lease));
         }
 
-        private static RestorationLease LoadRestorationLease(out string error)
+        private static RestorationLease LoadRestorationLease(
+            out string error)
         {
             error = string.Empty;
             string json = SessionState.GetString(
@@ -1578,7 +2056,8 @@ namespace PrefabSentinel
                 string.Empty);
             if (string.IsNullOrEmpty(json))
             {
-                error = "ClientSim restoration lease is missing.";
+                error =
+                    "ClientSim restoration lease is missing.";
                 return null;
             }
             try
@@ -1590,14 +2069,27 @@ namespace PrefabSentinel
                     || string.IsNullOrEmpty(lease.targetScenePath)
                     || string.IsNullOrEmpty(lease.responsePath))
                 {
-                    error = "ClientSim restoration lease is incomplete.";
+                    error =
+                        "ClientSim restoration lease is incomplete.";
                     return null;
                 }
                 if (!lease.previousStartSceneWasNull
-                    && string.IsNullOrEmpty(lease.previousStartSceneGuid))
+                    && string.IsNullOrEmpty(
+                        lease.previousStartSceneGuid))
                 {
-                    error = "ClientSim restoration lease lost the previous start scene GUID.";
+                    error =
+                        "ClientSim restoration lease lost the previous start scene GUID.";
                     return null;
+                }
+                if (lease.compileReport == null)
+                {
+                    lease.compileReport =
+                        new UnityRuntimeValidationBridge.RuntimeCompileReport();
+                }
+                if (lease.initialSceneSnapshot == null)
+                {
+                    lease.initialSceneSnapshot =
+                        Array.Empty<RuntimeCompileAudit.SceneIdentity>();
                 }
                 return lease;
             }
@@ -1622,6 +2114,48 @@ namespace PrefabSentinel
             UnityRuntimeValidationBridge.WriteResponse(
                 responsePath,
                 response);
+        }
+
+        private static UnityRuntimeValidationBridge.RuntimeResponse
+            AttachTransactionEvidence(
+                UnityRuntimeValidationBridge.RuntimeResponse response,
+                UnityRuntimeValidationBridge.RuntimeCompileReport compileReport,
+                RuntimeCompileAudit.SceneIdentity[] initialSceneSnapshot,
+                bool clientSimExecuted,
+                UnityRuntimeValidationBridge.SceneSideEffectSnapshot beforeSnapshot,
+                UnityRuntimeValidationBridge.SceneSideEffectSnapshot runtimeSnapshot,
+                UnityRuntimeValidationBridge.SceneSideEffectSnapshot afterSnapshot,
+                UnityRuntimeValidationBridge.ClientSimSideEffectReport sideEffectReport)
+        {
+            response.data.compile = compileReport;
+            response.data.clientsim =
+                new UnityRuntimeValidationBridge.RuntimeClientSimReport
+                {
+                    executed = clientSimExecuted,
+                    initial_scene_snapshot =
+                        initialSceneSnapshot,
+                    before = beforeSnapshot,
+                    runtime = runtimeSnapshot,
+                    after = afterSnapshot,
+                    side_effect_report = sideEffectReport,
+                };
+            response.data.udon_program_count =
+                compileReport.program_count;
+            response.data.executed = clientSimExecuted;
+            response.data.read_only =
+                !compileReport.executed
+                && !clientSimExecuted;
+            response.data.side_effect_report =
+                sideEffectReport;
+            if (response.success
+                && string.Equals(
+                    compileReport.severity,
+                    "warning",
+                    StringComparison.Ordinal))
+            {
+                response.severity = "warning";
+            }
+            return response;
         }
 
         private static UnityRuntimeValidationBridge.SceneSideEffectSnapshot
@@ -1732,7 +2266,8 @@ namespace PrefabSentinel
             {
                 if (asset == null
                     || !EditorUtility.IsPersistent(asset)
-                    || !EditorUtility.IsDirty(asset))
+                    || !EditorUtility.IsDirty(asset)
+                    || !AssetDatabase.IsNativeAsset(asset))
                 {
                     continue;
                 }

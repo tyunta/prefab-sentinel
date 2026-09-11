@@ -20,6 +20,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
+
 
 def write_file(path: Path, content: str) -> None:
     """Write *content* to *path*, creating parent directories as needed."""
@@ -53,6 +55,7 @@ class EditorBridgeResponder:
         self._response_builder = response_builder
         self._poll_interval = poll_interval
         self._stop_event = threading.Event()
+        self._worker_exception: BaseException | None = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self.observed_requests: list[dict[str, Any]] = []
 
@@ -64,35 +67,50 @@ class EditorBridgeResponder:
     def __exit__(self, exc_type, exc, tb) -> None:
         self._stop_event.set()
         self._thread.join(timeout=2.0)
+        worker_exception = self._worker_exception
+        self._worker_exception = None
+
+        if exc_type is not None:
+            return
+        if self._thread.is_alive():
+            raise RuntimeError(
+                "EditorBridgeResponder worker did not stop within 2.0 seconds."
+            )
+        if worker_exception is not None:
+            raise worker_exception
 
     def _loop(self) -> None:
-        seen: set[str] = set()
-        while not self._stop_event.is_set():
-            try:
-                entries = list(self._watch_dir.iterdir())
-            except FileNotFoundError:
-                time.sleep(self._poll_interval)
-                continue
-            for entry in entries:
-                if entry.name in seen or not entry.name.endswith(".request.json"):
-                    continue
-                request_id = entry.name[: -len(".request.json")]
-                response_file = self._watch_dir / f"{request_id}.response.json"
-                if response_file.exists():
-                    continue
+        try:
+            seen: set[str] = set()
+            while not self._stop_event.is_set():
                 try:
-                    request_payload = json.loads(entry.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    # Production code rewrites the request file atomically;
-                    # a partial-read here means we'll retry next tick.
+                    entries = list(self._watch_dir.iterdir())
+                except FileNotFoundError:
+                    time.sleep(self._poll_interval)
                     continue
-                self.observed_requests.append(request_payload)
-                response_payload = self._response_builder(request_payload)
-                tmp_file = self._watch_dir / f"{request_id}.response.json.tmp"
-                tmp_file.write_text(
-                    json.dumps(response_payload, ensure_ascii=False),
-                    encoding="utf-8",
-                )
-                tmp_file.rename(response_file)
-                seen.add(entry.name)
-            time.sleep(self._poll_interval)
+                for entry in entries:
+                    if entry.name in seen or not entry.name.endswith(".request.json"):
+                        continue
+                    request_id = entry.name[: -len(".request.json")]
+                    response_file = self._watch_dir / f"{request_id}.response.json"
+                    if response_file.exists():
+                        continue
+                    try:
+                        request_payload = json.loads(entry.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        # Production code rewrites the request file atomically;
+                        # a partial-read here means we'll retry next tick.
+                        continue
+                    self.observed_requests.append(request_payload)
+                    response_payload = dict(self._response_builder(request_payload))
+                    response_payload.setdefault("protocol_version", PROTOCOL_VERSION)
+                    tmp_file = self._watch_dir / f"{request_id}.response.json.tmp"
+                    tmp_file.write_text(
+                        json.dumps(response_payload, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    tmp_file.rename(response_file)
+                    seen.add(entry.name)
+                time.sleep(self._poll_interval)
+        except BaseException as exc:
+            self._worker_exception = exc

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 
 from prefab_sentinel.contracts import (
@@ -342,6 +343,8 @@ def validate_refs(
     # path.
     if refresh_guid_index:
         reference_resolver.invalidate_guid_index()
+        # New GUIDs must also enter the scan's cached source-file inventory.
+        reference_resolver.invalidate_scope_files_cache()
 
     step = reference_resolver.scan_broken_references(
         scope=scope,
@@ -544,19 +547,47 @@ def _inspect_world_canvas_step(scene_path: str, runtime_root: Path | None = None
 def validate_runtime(
     runtime_validation: RuntimeValidationService,
     scene_path: str,
-    profile: str = "compile_only",
+    profile: str | None = None,
     log_file: str | None = None,
     since_timestamp: str | None = None,
     allow_warnings: bool = False,
     max_diagnostics: int = 200,
     confirm: bool = False,
     change_reason: str | None = None,
-    allow_dirty_before_clientsim: bool = False,
+    out_report: str | None = None,
+    generated_asset_policy: str = "deny",
+    allow_dirty_program_assets_before_compile: bool = False,
+    allow_dirty_scenes_before_compile: bool = False,
+    console_authority: str = "unity_log",
 ) -> ToolResponse:
+    from prefab_sentinel.mcp_validation import require_write_audit
+    from prefab_sentinel.services.runtime_validation import (
+        RuntimeReportReservation,
+        discard_runtime_report,
+        publish_runtime_report,
+        reserve_runtime_report,
+        runtime_report_skeleton,
+    )
     from prefab_sentinel.services.runtime_validation.config import default_runtime_root
 
+    normalized_profile = profile.strip() if isinstance(profile, str) else ""
+    if not normalized_profile:
+        return ToolResponse(
+            success=False,
+            severity=Severity.ERROR,
+            code="RUN_PROFILE_REQUIRED",
+            message="profile is required.",
+            data={
+                "field": "profile",
+                "scene_path": scene_path,
+                "profile": profile,
+                "read_only": True,
+                "executed": False,
+            },
+        )
+
     supported_profiles = ("compile_only", "editor_console_only", "clientsim")
-    if profile not in supported_profiles:
+    if normalized_profile not in supported_profiles:
         return ToolResponse(
             success=False,
             severity=Severity.ERROR,
@@ -566,69 +597,292 @@ def validate_runtime(
                 + ", ".join(supported_profiles)
                 + "."
             ),
-            data={"scene_path": scene_path, "profile": profile, "read_only": True},
+            data={
+                "field": "profile",
+                "scene_path": scene_path,
+                "profile": normalized_profile,
+                "read_only": True,
+                "executed": False,
+            },
         )
 
-    if profile == "clientsim" and (not confirm or change_reason is None or not change_reason.strip()):
+    normalized_console_authority = (
+        console_authority.strip() if isinstance(console_authority, str) else ""
+    )
+    supported_console_authorities = ("unity_log", "editor_bridge")
+    if (
+        normalized_profile == "compile_only"
+        and normalized_console_authority not in supported_console_authorities
+    ):
         return ToolResponse(
             success=False,
             severity=Severity.ERROR,
-            code="CLIENTSIM_CONFIRM_REQUIRED",
-            message="ClientSim validation requires explicit audit confirmation and a non-empty change reason.",
+            code="RUN_CONSOLE_AUTHORITY_UNSUPPORTED",
+            message=(
+                "Unsupported compile-only Console authority. Supported authorities: "
+                + ", ".join(supported_console_authorities)
+                + "."
+            ),
             data={
+                "field": "console_authority",
                 "scene_path": scene_path,
-                "profile": profile,
+                "profile": normalized_profile,
+                "console_authority": console_authority,
                 "read_only": True,
                 "executed": False,
             },
         )
 
     runtime_root = default_runtime_root(runtime_validation.project_root)
-    canvas_step = _inspect_world_canvas_step(scene_path, runtime_root)
-    steps: list[tuple[str, ToolResponse]] = [("inspect_world_canvas", canvas_step)]
 
-    if profile in ("compile_only", "clientsim"):
-        compile_step = runtime_validation.compile_udonsharp()
-        steps.append(("compile_udonsharp", compile_step))
-
-    if profile == "clientsim":
-        run_step = runtime_validation.run_clientsim(
-            scene_path,
-            profile,
-            confirm=confirm,
-            change_reason=change_reason,
-            allow_dirty_before=allow_dirty_before_clientsim,
-        )
-        steps.append(("run_clientsim", run_step))
-        if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            severity = max_severity([step.severity for _, step in steps])
-            return ToolResponse(
-                success=False,
-                severity=severity,
-                code="VALIDATE_RUNTIME_RESULT",
-                message="validate.runtime stopped by fail-fast policy due to scene/runtime setup errors.",
-                data={
-                    "scene_path": scene_path,
-                    "profile": profile,
-                    "read_only": all(bool(step.data.get("read_only", True)) for _, step in steps),
-                    "fail_fast_triggered": True,
-                    "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
-                },
-                diagnostics=list(canvas_step.diagnostics),
-            )
-
-    if profile == "editor_console_only":
+    if normalized_profile == "editor_console_only":
+        canvas_step = _inspect_world_canvas_step(scene_path, runtime_root)
         collect_step = runtime_validation.collect_editor_console(
             since_timestamp=since_timestamp,
             max_lines=max_diagnostics,
         )
+        classify_step = runtime_validation.classify_errors(
+            log_lines=list(collect_step.data.get("log_lines", [])),
+            max_diagnostics=max_diagnostics,
+        )
+        assert_step = runtime_validation.assert_no_critical_errors(
+            classification_result=classify_step,
+            allow_warnings=allow_warnings,
+        )
+        steps = [
+            ("inspect_world_canvas", canvas_step),
+            ("collect_editor_console", collect_step),
+            ("classify_errors", classify_step),
+            ("assert_no_critical_errors", assert_step),
+        ]
+        return ToolResponse(
+            success=all(step.success for _, step in steps),
+            severity=max_severity([step.severity for _, step in steps]),
+            code="VALIDATE_RUNTIME_RESULT",
+            message="validate.runtime pipeline completed.",
+            data={
+                "scene_path": scene_path,
+                "profile": normalized_profile,
+                "read_only": True,
+                "fail_fast_triggered": False,
+                "steps": [
+                    {"step": name, "result": step.to_dict()}
+                    for name, step in steps
+                ],
+            },
+            diagnostics=list(canvas_step.diagnostics)
+            + list(classify_step.diagnostics),
+        )
+
+    reservation = reserve_runtime_report(runtime_root, out_report)
+    if not isinstance(reservation, RuntimeReportReservation):
+        return reservation
+
+    normalized_reason = change_reason.strip() if isinstance(change_reason, str) else ""
+    audit = {
+        "confirm": confirm,
+        "change_reason": normalized_reason,
+        "generated_asset_policy": generated_asset_policy,
+        "allow_dirty_program_assets_before_compile": (
+            allow_dirty_program_assets_before_compile
+        ),
+        "allow_dirty_scenes_before_compile": allow_dirty_scenes_before_compile,
+    }
+    report = runtime_report_skeleton(normalized_profile, audit)
+
+    def publish_terminal(response: ToolResponse) -> ToolResponse:
+        response_payload = response.to_dict()
+        result_payload = {
+            "success": response_payload["success"],
+            "severity": response_payload["severity"],
+            "code": response_payload["code"],
+            "message": response_payload["message"],
+            "diagnostics": response_payload["diagnostics"],
+            "steps": response.data.get("steps", []),
+            "fail_fast_triggered": response.data.get("fail_fast_triggered", False),
+        }
+        if "field" in response.data:
+            result_payload["field"] = response.data["field"]
+        console_evidence = response.data.get("console_evidence")
+        if isinstance(console_evidence, dict):
+            result_payload["console_evidence"] = console_evidence
+        report["result"] = result_payload
+        terminal = ToolResponse(
+            success=response.success,
+            severity=response.severity,
+            code=response.code,
+            message=response.message,
+            data=report,
+            diagnostics=list(response.diagnostics),
+        )
+        try:
+            publish_runtime_report(reservation, report)
+        except OSError:
+            with suppress(OSError):
+                discard_runtime_report(reservation)
+            return ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="OUT_REPORT_WRITE_FAILED",
+                message="Runtime validation report could not be published.",
+                data={"operation_result": terminal.to_dict()},
+            )
+        return terminal
+
+    audit_error = require_write_audit(
+        "validate_runtime",
+        confirm,
+        change_reason,
+    )
+    if audit_error is not None:
+        return publish_terminal(
+            ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code=str(audit_error["code"]),
+                message=str(audit_error["message"]),
+                data={
+                    "scene_path": scene_path,
+                    "profile": normalized_profile,
+                    "read_only": True,
+                    "executed": False,
+                },
+            )
+        )
+
+    supported_generated_asset_policies = ("deny", "create", "replace")
+    if generated_asset_policy not in supported_generated_asset_policies:
+        return publish_terminal(
+            ToolResponse(
+                success=False,
+                severity=Severity.ERROR,
+                code="GENERATED_ASSET_POLICY_INVALID",
+                message=(
+                    "generated_asset_policy must be one of: "
+                    + ", ".join(supported_generated_asset_policies)
+                    + "."
+                ),
+                data={
+                    "field": "generated_asset_policy",
+                    "scene_path": scene_path,
+                    "profile": normalized_profile,
+                    "read_only": True,
+                    "executed": False,
+                },
+            )
+        )
+
+    canvas_step = _inspect_world_canvas_step(scene_path, runtime_root)
+    report["preflight"] = {
+        "completed": True,
+        "diagnostics": canvas_step.to_dict()["diagnostics"],
+    }
+    execute_step = runtime_validation.execute_write_profile(
+        scene_path=scene_path,
+        profile=normalized_profile,
+        confirm=True,
+        change_reason=normalized_reason,
+        generated_asset_policy=generated_asset_policy,
+        allow_dirty_program_assets_before_compile=(
+            allow_dirty_program_assets_before_compile
+        ),
+        allow_dirty_scenes_before_compile=allow_dirty_scenes_before_compile,
+    )
+    for section in ("compile", "clientsim"):
+        section_payload = execute_step.data.get(section)
+        if isinstance(section_payload, dict):
+            report[section] = section_payload
+
+    if not execute_step.success:
+        steps = [
+            ("inspect_world_canvas", canvas_step),
+            ("validate_runtime", execute_step),
+        ]
+        return publish_terminal(
+            ToolResponse(
+                success=False,
+                severity=max_severity([step.severity for _, step in steps]),
+                code="VALIDATE_RUNTIME_RESULT",
+                message="validate.runtime pipeline completed.",
+                data={
+                    "scene_path": scene_path,
+                    "profile": normalized_profile,
+                    "read_only": all(
+                        bool(step.data.get("read_only", True))
+                        for _, step in steps
+                    ),
+                    "fail_fast_triggered": True,
+                    "steps": [
+                        {"step": name, "result": step.to_dict()}
+                        for name, step in steps
+                    ],
+                },
+                diagnostics=(
+                    list(canvas_step.diagnostics)
+                    + list(execute_step.diagnostics)
+                ),
+            )
+        )
+
+    console_evidence: dict[str, object] | None = None
+    if normalized_profile == "compile_only" and normalized_console_authority == "editor_bridge":
         collect_step_name = "collect_editor_console"
+        collect_step = runtime_validation.collect_editor_console(
+            since_timestamp=since_timestamp,
+            max_lines=max_diagnostics,
+        )
     else:
+        collect_step_name = "collect_unity_console"
         collect_step = runtime_validation.collect_unity_console(
             log_file=log_file,
             since_timestamp=since_timestamp,
         )
-        collect_step_name = "collect_unity_console"
+
+    if normalized_profile == "compile_only":
+        line_count = collect_step.data.get("line_count", 0)
+        console_evidence = {
+            "authority": collect_step.data.get(
+                "console_authority",
+                normalized_console_authority,
+            ),
+            "available": collect_step.data.get("evidence_available") is True,
+            "collection_code": collect_step.code,
+            "line_count": line_count if type(line_count) is int else 0,
+        }
+        if not collect_step.success or not console_evidence["available"]:
+            steps = [
+                ("inspect_world_canvas", canvas_step),
+                ("validate_runtime", execute_step),
+                (collect_step_name, collect_step),
+            ]
+            return publish_terminal(
+                ToolResponse(
+                    success=False,
+                    severity=max_severity([step.severity for _, step in steps]),
+                    code="VALIDATE_RUNTIME_RESULT",
+                    message="validate.runtime pipeline completed without Console evidence.",
+                    data={
+                        "scene_path": scene_path,
+                        "profile": normalized_profile,
+                        "read_only": all(
+                            bool(step.data.get("read_only", True))
+                            for _, step in steps
+                        ),
+                        "fail_fast_triggered": True,
+                        "console_evidence": console_evidence,
+                        "steps": [
+                            {"step": name, "result": step.to_dict()}
+                            for name, step in steps
+                        ],
+                    },
+                    diagnostics=(
+                        list(canvas_step.diagnostics)
+                        + list(execute_step.diagnostics)
+                        + list(collect_step.diagnostics)
+                    ),
+                )
+            )
+
     classify_step = runtime_validation.classify_errors(
         log_lines=list(collect_step.data.get("log_lines", [])),
         max_diagnostics=max_diagnostics,
@@ -637,29 +891,42 @@ def validate_runtime(
         classification_result=classify_step,
         allow_warnings=allow_warnings,
     )
-    steps.extend(
-        [
-            (collect_step_name, collect_step),
-            ("classify_errors", classify_step),
-            ("assert_no_critical_errors", assert_step),
-        ]
-    )
-
+    steps = [
+        ("inspect_world_canvas", canvas_step),
+        ("validate_runtime", execute_step),
+        (collect_step_name, collect_step),
+        ("classify_errors", classify_step),
+        ("assert_no_critical_errors", assert_step),
+    ]
     severity = max_severity([step.severity for _, step in steps])
     success = all(step.success for _, step in steps)
-    diagnostics = list(canvas_step.diagnostics) + list(classify_step.diagnostics)
-
-    return ToolResponse(
+    response = ToolResponse(
         success=success,
         severity=severity,
         code="VALIDATE_RUNTIME_RESULT",
         message="validate.runtime pipeline completed.",
         data={
             "scene_path": scene_path,
-            "profile": profile,
-            "read_only": all(bool(step.data.get("read_only", True)) for _, step in steps),
+            "profile": normalized_profile,
+            "read_only": all(
+                bool(step.data.get("read_only", True))
+                for _, step in steps
+            ),
             "fail_fast_triggered": False,
-            "steps": [{"step": name, "result": step.to_dict()} for name, step in steps],
+            **(
+                {"console_evidence": console_evidence}
+                if console_evidence is not None
+                else {}
+            ),
+            "steps": [
+                {"step": name, "result": step.to_dict()}
+                for name, step in steps
+            ],
         },
-        diagnostics=diagnostics,
+        diagnostics=(
+            list(canvas_step.diagnostics)
+            + list(execute_step.diagnostics)
+            + list(classify_step.diagnostics)
+        ),
     )
+    return publish_terminal(response)

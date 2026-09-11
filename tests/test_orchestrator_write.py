@@ -304,6 +304,145 @@ class OrchestratorWriteHelperTests(unittest.TestCase):
             (diag.detail, diag.evidence),
         )
 
+    def test_write_helper_rejects_malformed_producer_without_refresh(self) -> None:
+        class NonDictDiagnostic:
+            def get(self, key: str, default: str = "") -> str:
+                return {
+                    "detail": "not_a_mapping",
+                    "evidence": "diagnostic entry must be an object",
+                }.get(key, default)
+
+        malformed_results: dict[str, dict[str, Any]] = {
+            "string success": {
+                "success": "false",
+                "severity": "info",
+                "code": "MAT_PROP_OK",
+                "message": "malformed success",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [],
+            },
+            "numeric success": {
+                "success": 1,
+                "severity": "info",
+                "code": "MAT_PROP_OK",
+                "message": "malformed success",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [],
+            },
+            "missing severity": {
+                "success": True,
+                "code": "MAT_PROP_OK",
+                "message": "missing common field",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [],
+            },
+            "contradictory severity": {
+                "success": True,
+                "severity": "error",
+                "code": "MAT_PROP_OK",
+                "message": "successful error",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [],
+            },
+            "non-object data": {
+                "success": False,
+                "severity": "error",
+                "code": "MAT_PROP_FAILED",
+                "message": "invalid data",
+                "data": [],
+                "diagnostics": [],
+            },
+            "non-object diagnostic": {
+                "success": False,
+                "severity": "error",
+                "code": "MAT_PROP_FAILED",
+                "message": "invalid diagnostic",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [NonDictDiagnostic()],
+            },
+            "non-string diagnostic field": {
+                "success": False,
+                "severity": "error",
+                "code": "MAT_PROP_FAILED",
+                "message": "invalid diagnostic detail",
+                "data": {"asset_path": "Assets/Mat.mat"},
+                "diagnostics": [{"detail": 7, "evidence": []}],
+            },
+        }
+
+        for label, core_result in malformed_results.items():
+            with self.subTest(label=label):
+                orch = _StubOrchestrator()
+                with mock.patch.object(
+                    orchestrator_write,
+                    "_write_material_property",
+                    return_value=core_result,
+                ):
+                    response = orchestrator_write.set_material_property(
+                        orch,  # type: ignore[arg-type]
+                        target_path="Assets/Mat.mat",
+                        property_name="_Color",
+                        value="0",
+                        dry_run=False,
+                        change_reason="material polish pass",
+                    )
+
+                self.assertEqual(
+                    (False, Severity.ERROR, "WRITE_RESPONSE_SCHEMA", 0),
+                    (
+                        response.success,
+                        response.severity,
+                        response.code,
+                        orch.refresh_calls,
+                    ),
+                )
+
+    def test_write_helper_preserves_valid_soft_negative_without_refresh(self) -> None:
+        orch = _StubOrchestrator()
+        core_result: dict[str, Any] = {
+            "success": False,
+            "severity": "warning",
+            "code": "MAT_PROP_SOFT_NEGATIVE",
+            "message": "material remains unchanged",
+            "data": {
+                "asset_path": "Assets/Mat.mat",
+                "reason": "unsupported shader property",
+            },
+            "diagnostics": [],
+        }
+        with mock.patch.object(
+            orchestrator_write,
+            "_write_material_property",
+            return_value=core_result,
+        ):
+            response = orchestrator_write.set_material_property(
+                orch,  # type: ignore[arg-type]
+                target_path="Assets/Mat.mat",
+                property_name="_Color",
+                value="0",
+                dry_run=False,
+                change_reason="material polish pass",
+            )
+
+        self.assertEqual(
+            (
+                False,
+                Severity.WARNING,
+                "MAT_PROP_SOFT_NEGATIVE",
+                "material remains unchanged",
+                core_result["data"],
+                0,
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.message,
+                response.data,
+                orch.refresh_calls,
+            ),
+        )
+
     def test_write_helper_attaches_auto_refresh_marker_on_confirmed_success(
         self,
     ) -> None:

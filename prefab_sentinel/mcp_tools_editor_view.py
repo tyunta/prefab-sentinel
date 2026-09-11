@@ -119,6 +119,32 @@ RECOMPILE_AND_WAIT_TIMEOUT_MAX_SEC = 1800.0
 SCREENSHOT_DIMENSION_MIN = 0
 SCREENSHOT_DIMENSION_MAX = 4096
 
+EDITOR_RUN_TEST_PROFILES = ("default", "bridge_acceptance")
+
+
+def _editor_run_tests_invalid_envelope(
+    code: str,
+    message: str,
+    *,
+    supplied: Any,
+) -> dict[str, Any]:
+    return {
+        "success": False,
+        "severity": "error",
+        "code": code,
+        "message": message,
+        "data": {"supplied": supplied},
+        "diagnostics": [],
+    }
+
+
+def _is_lowercase_hex_run_id(run_id: str) -> bool:
+    return len(run_id) == 32 and all(
+        "0" <= character <= "9" or "a" <= character <= "f"
+        for character in run_id
+    )
+
+
 def _max_entries_out_of_range_envelope(value: int) -> dict[str, Any]:
     """Return the canonical MAX_ENTRIES_OUT_OF_RANGE envelope.
 
@@ -828,11 +854,71 @@ def register_editor_view_tools(server: MCPServer) -> None:
 
     @server.tool()
     def editor_run_tests(
+        profile: str = "default",
+        live_probes: bool = False,
+        run_id: str = "",
         timeout_sec: int = 300,
     ) -> dict[str, Any]:
         """Run Unity integration tests via Editor Bridge.
 
+        The bridge_acceptance profile is explicit and live-only: it requires
+        both live_probes=True and a 32-character lowercase hexadecimal run ID.
+        The default profile keeps live probes disabled and carries no run ID,
+        preserving the historical suite behavior.
+
         Args:
+            profile: default or the bounded bridge_acceptance profile.
+            live_probes: Explicit authorization for acceptance fixture mutation.
+            run_id: Controller-generated 32-character lowercase hexadecimal ID.
             timeout_sec: Maximum wait time in seconds (default: 300).
         """
-        return send_action(action="run_integration_tests", timeout_sec=timeout_sec)
+        if profile not in EDITOR_RUN_TEST_PROFILES:
+            return _editor_run_tests_invalid_envelope(
+                "EDITOR_CTRL_TEST_PROFILE_INVALID",
+                (
+                    f"profile={profile!r} is not one of the accepted profiles "
+                    f"({', '.join(EDITOR_RUN_TEST_PROFILES)})."
+                ),
+                supplied=profile,
+            )
+
+        if profile == "bridge_acceptance":
+            if not live_probes:
+                return _editor_run_tests_invalid_envelope(
+                    "EDITOR_CTRL_TEST_LIVE_PROBES_REQUIRED",
+                    (
+                        "profile='bridge_acceptance' requires "
+                        "live_probes=True."
+                    ),
+                    supplied=live_probes,
+                )
+            if not _is_lowercase_hex_run_id(run_id):
+                return _editor_run_tests_invalid_envelope(
+                    "EDITOR_CTRL_TEST_RUN_ID_INVALID",
+                    (
+                        "profile='bridge_acceptance' requires run_id to be "
+                        "exactly 32 lowercase hexadecimal characters."
+                    ),
+                    supplied=run_id,
+                )
+        else:
+            if live_probes:
+                return _editor_run_tests_invalid_envelope(
+                    "EDITOR_CTRL_TEST_LIVE_PROBES_INVALID",
+                    "profile='default' requires live_probes=False.",
+                    supplied=live_probes,
+                )
+            if run_id:
+                return _editor_run_tests_invalid_envelope(
+                    "EDITOR_CTRL_TEST_RUN_ID_INVALID",
+                    "profile='default' requires an empty run_id.",
+                    supplied=run_id,
+                )
+
+        return send_action(
+            action="run_integration_tests",
+            test_profile=profile,
+            run_live_probes=live_probes,
+            run_id=run_id,
+            timeout_sec=timeout_sec,
+        )

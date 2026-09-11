@@ -210,80 +210,92 @@ namespace PrefabSentinel
                 watchDir, $"{request.request_id}.complete.json");
             if (File.Exists(completionFile))
             {
+                string body;
                 try
                 {
-                    string body = File.ReadAllText(completionFile);
-                    EditorControlResponse inner = null;
-                    try
-                    {
-                        inner = JsonUtility.FromJson<EditorControlResponse>(body);
-                    }
-                    catch (Exception parseEx)
-                    {
-                        Debug.LogWarning(
-                            $"[PrefabSentinel] HandleRunScriptPoll: failed to parse completion file '{completionFile}': {parseEx.Message}");
-                    }
-                    if (inner != null && inner.data != null)
-                    {
-                        string innerStdout = inner.data.stdout ?? string.Empty;
-                        string innerMessage = string.IsNullOrEmpty(inner.message)
-                            ? "run_script_poll: job completed."
-                            : inner.message;
-                        var response = new EditorControlResponse
-                        {
-                            protocol_version = ProtocolVersion,
-                            success = inner.success,
-                            severity = inner.severity,
-                            code = inner.success
-                                ? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"
-                                : inner.code,
-                            message = innerMessage,
-                            data = new EditorControlData
-                            {
-                                executed = inner.data.executed,
-                                request_id = request.request_id,
-                                status = inner.success ? "completed" : "failed",
-                                stdout = innerStdout,
-                                errors = inner.data.errors ?? Array.Empty<string>(),
-                                return_value = inner.data.return_value,
-                                outputs = inner.data.outputs ?? Array.Empty<RunScriptOutputEntry>(),
-                                unsupported_output_key = inner.data.unsupported_output_key ?? string.Empty,
-                                exception = inner.data.exception,
-                                path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
-                                operation = inner.data.operation ?? string.Empty,
-                                editor_focused = inner.data.editor_focused,
-                                deferred_reason = inner.data.deferred_reason ?? string.Empty,
-                                elapsed_sec = inner.data.elapsed_sec,
-                                budget_sec = inner.data.budget_sec,
-                                diagnostic_compiling = inner.data.diagnostic_compiling,
-                                job_retained = inner.data.job_retained,
-                                cleanup_performed = inner.data.cleanup_performed,
-                            },
-                            diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
-                            operator_context = inner.operator_context,
-                        };
-                        if (response.diagnostics.Length > 0 && response.success) response.severity = "warning";
-                        return response;
-                    }
-                    return BuildSuccess(
-                        "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
-                        "run_script_poll: completion file present but unparseable; raw body surfaced via stdout.",
-                        data: new EditorControlData
-                        {
-                            executed = true,
-                            request_id = request.request_id,
-                            status = "completed",
-                            stdout = body,
-                        });
+                    body = File.ReadAllText(completionFile);
                 }
-                catch (Exception ex)
+                catch (Exception readEx)
                 {
                     Debug.LogWarning(
-                        $"[PrefabSentinel] HandleRunScriptPoll: failed to read completion file '{completionFile}': {ex}");
+                        $"[PrefabSentinel] HandleRunScriptPoll: failed to read completion file '{completionFile}': {readEx}");
                     return BuildError(
-                        "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
-                        "run_script_poll: completion file unreadable.");
+                        "EDITOR_CTRL_RUN_SCRIPT_COMPLETION_READ_FAILED",
+                        "RunScript completion could not be read; execution outcome is unknown.",
+                        new EditorControlData
+                        {
+                            executed = false,
+                            request_id = request.request_id,
+                            status = "failed",
+                            state_unknown = true,
+                            read_only = false,
+                        });
                 }
+
+                EditorControlResponse inner = null;
+                try
+                {
+                    if (RunScriptCompletionShape.HasExactlyOneObjectData(body))
+                        inner = JsonUtility.FromJson<EditorControlResponse>(body);
+                }
+                catch (Exception parseEx)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] HandleRunScriptPoll: failed to parse completion file '{completionFile}': {parseEx.Message}");
+                }
+                if (inner != null && inner.data != null)
+                {
+                    string innerStdout = inner.data.stdout ?? string.Empty;
+                    string innerMessage = string.IsNullOrEmpty(inner.message)
+                        ? "run_script_poll: job completed."
+                        : inner.message;
+                    var response = new EditorControlResponse
+                    {
+                        protocol_version = ProtocolVersion,
+                        success = inner.success,
+                        severity = inner.severity,
+                        code = inner.success
+                            ? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"
+                            : inner.code,
+                        message = innerMessage,
+                        data = new EditorControlData
+                        {
+                            executed = inner.data.executed,
+                            request_id = request.request_id,
+                            status = inner.success ? "completed" : "failed",
+                            stdout = innerStdout,
+                            errors = inner.data.errors ?? Array.Empty<string>(),
+                            return_value = inner.data.return_value,
+                            outputs = inner.data.outputs ?? Array.Empty<RunScriptOutputEntry>(),
+                            unsupported_output_key = inner.data.unsupported_output_key ?? string.Empty,
+                            exception = inner.data.exception,
+                            path_hints = inner.data.path_hints ?? Array.Empty<WslPathHint>(),
+                            operation = inner.data.operation ?? string.Empty,
+                            editor_focused = inner.data.editor_focused,
+                            deferred_reason = inner.data.deferred_reason ?? string.Empty,
+                            elapsed_sec = inner.data.elapsed_sec,
+                            budget_sec = inner.data.budget_sec,
+                            diagnostic_compiling = inner.data.diagnostic_compiling,
+                            job_retained = inner.data.job_retained,
+                            cleanup_performed = inner.data.cleanup_performed,
+                        },
+                        diagnostics = inner.diagnostics ?? Array.Empty<EditorControlDiagnostic>(),
+                        operator_context = inner.operator_context,
+                    };
+                    if (response.diagnostics.Length > 0 && response.success) response.severity = "warning";
+                    return response;
+                }
+                return BuildError(
+                    "EDITOR_CTRL_RUN_SCRIPT_COMPLETION_INVALID",
+                    "RunScript completion could not be interpreted; execution outcome is unknown.",
+                    new EditorControlData
+                    {
+                        executed = false,
+                        request_id = request.request_id,
+                        status = "failed",
+                        state_unknown = true,
+                        read_only = false,
+                    });
             }
             if (request.cleanup_on_timeout)
             {

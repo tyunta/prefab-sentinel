@@ -3887,5 +3887,401 @@ class TestValidateInspectorProfileAddresses(unittest.TestCase):
         mock_send.assert_not_called()
 
 
+class TestInspectorSceneLifecycleProjection(unittest.TestCase):
+    _FAILURES = {
+        "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY": (
+            "INSPECTOR_SCENE_DIRTY",
+            "The loaded Scene has unsaved changes; save or discard them before inspecting its last-saved serialized surface.",
+        ),
+        "EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS": (
+            "INSPECTOR_SCENE_AMBIGUOUS",
+            "The requested Scene is loaded more than once; close duplicate instances before inspecting its serialized surface.",
+        ),
+        "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED": (
+            "INSPECTOR_SCENE_RESTORE_FAILED",
+            "Scene inspection could not restore the Editor Scene state.",
+        ),
+    }
+
+    def _bridge_response(
+        self,
+        raw_code: str,
+        *,
+        asset_path: str = "Assets/Test.unity",
+        ownership: str | None = None,
+        evidence_overrides: dict[str, object] | None = None,
+        diagnostic_overrides: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        if ownership is None:
+            ownership = (
+                "owned"
+                if raw_code == "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED"
+                else "none"
+            )
+        _, detail = self._FAILURES[raw_code]
+        evidence: dict[str, object] = {
+            "asset_path": asset_path,
+            "ownership": ownership,
+            "matched_handles": [17],
+            "cleanup_attempted": True,
+            "close_result": "succeeded",
+            "active_restore_attempted": False,
+            "active_restore_result": "not_attempted",
+            "before": {
+                "scenes": [{"order": 0, "handle": 17, "path": asset_path, "dirty": False}],
+                "active_handle": 17,
+                "active_path": asset_path,
+            },
+            "after": {
+                "scenes": [{"order": 0, "handle": 17, "path": asset_path, "dirty": False}],
+                "active_handle": 17,
+                "active_path": asset_path,
+            },
+            "failed_postconditions": ["owned_close_failed"],
+        }
+        if evidence_overrides is not None:
+            evidence.update(evidence_overrides)
+        diagnostic: dict[str, object] = {
+            "severity": "error",
+            "code": raw_code,
+            "path": asset_path,
+            "location": ownership,
+            "detail": detail,
+            "evidence": json.dumps(evidence),
+        }
+        if diagnostic_overrides is not None:
+            diagnostic.update(diagnostic_overrides)
+        return {
+            "success": False,
+            "severity": "critical",
+            "code": raw_code,
+            "message": "raw bridge message at /absolute/secret with Exception marker",
+            "data": {"secret": "/absolute/secret", "exception": "BridgeException"},
+            "diagnostics": [diagnostic],
+        }
+
+    def _call_surface(self, bridge_response: dict[str, object]) -> tuple[dict[str, object], Mock]:
+        server = create_server(project_root="/project")
+        with patch(
+            "prefab_sentinel.inspector_profiles.application.send_action",
+            return_value=bridge_response,
+        ) as mock_send:
+            result = structured_payload(call_tool_result(
+                server,
+                "inspect_serialized_surface",
+                {
+                    "asset_path": "Assets/Test.unity",
+                    "symbol_path": "Root/MonoBehaviour(Example)",
+                },
+            ))
+        return result, mock_send
+
+    def test_scene_lifecycle_failures_project_exact_sanitized_public_errors(self) -> None:
+        for raw_code, (public_code, detail) in self._FAILURES.items():
+            with self.subTest(raw_code=raw_code):
+                bridge_response = self._bridge_response(raw_code)
+                result, mock_send = self._call_surface(bridge_response)
+
+                expected_evidence = json.loads(
+                    bridge_response["diagnostics"][0]["evidence"]  # type: ignore[index]
+                )
+                self.assertEqual(
+                    {
+                        "success": False,
+                        "severity": "error",
+                        "code": public_code,
+                        "message": detail,
+                        "data": {},
+                        "diagnostics": [{
+                            "severity": "error",
+                            "code": public_code,
+                            "message": detail,
+                            "data": {
+                                "path": "Assets/Test.unity",
+                                "location": (
+                                    "owned"
+                                    if raw_code == "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED"
+                                    else "none"
+                                ),
+                                "detail": detail,
+                                "evidence": expected_evidence,
+                            },
+                        }],
+                    },
+                    result,
+                    msg=f"Scene lifecycle failure leaked or lost its public contract: {result!r}",
+                )
+                self.assertNotIn("/absolute/secret", json.dumps(result))
+                self.assertNotIn("BridgeException", json.dumps(result))
+                _assert_component_surface_request(
+                    mock_send,
+                    expected_project_root=application.to_windows_path("/project"),
+                    asset_path="Assets/Test.unity",
+                    symbol_path="Root/MonoBehaviour(Example)",
+                    include_override_origin=False,
+                )
+
+    def test_malformed_scene_lifecycle_evidence_remains_generic_unavailable(self) -> None:
+        invalid_snapshot = {
+            "scenes": [{
+                "order": 0,
+                "handle": 17,
+                "path": "Assets/Test.unity",
+                "dirty": 0,
+            }],
+            "active_handle": 17,
+            "active_path": "Assets/Test.unity",
+        }
+        unsafe_scene_path = "/absolute/secret-scene"
+        unsafe_active_path = "BridgeException:/secret-active"
+        cases: tuple[tuple[str, dict[str, object], dict[str, object], bool, str | None], ...] = (
+            ("missing diagnostic", {}, {}, True, None),
+            ("mismatched diagnostic code", {}, {"code": "OTHER"}, False, None),
+            ("mismatched diagnostic path", {}, {"path": "Assets/Other.unity"}, False, None),
+            ("invalid JSON", {}, {"evidence": "not json"}, False, None),
+            ("extra evidence key", {"unexpected": "value"}, {}, False, None),
+            ("wrong primitive type", {"cleanup_attempted": 1}, {}, False, None),
+            ("wrong snapshot entry type", {"before": invalid_snapshot}, {}, False, None),
+            ("absolute asset path", {"asset_path": "/absolute/secret.unity"}, {}, False, None),
+            ("unknown ownership token", {"ownership": "untrusted"}, {}, False, None),
+            ("unknown close result token", {"close_result": "maybe"}, {}, False, None),
+            ("unknown restore result token", {"active_restore_result": "maybe"}, {}, False, None),
+            ("array close result", {"close_result": []}, {}, False, None),
+            ("object close result", {"close_result": {}}, {}, False, None),
+            ("array restore result", {"active_restore_result": []}, {}, False, None),
+            ("object restore result", {"active_restore_result": {}}, {}, False, None),
+            (
+                "absolute snapshot scene path",
+                {
+                    "before": {
+                        "scenes": [{
+                            "order": 0,
+                            "handle": 17,
+                            "path": unsafe_scene_path,
+                            "dirty": False,
+                        }],
+                        "active_handle": 17,
+                        "active_path": "Assets/Test.unity",
+                    }
+                },
+                {},
+                False,
+                unsafe_scene_path,
+            ),
+            (
+                "exception-marked active path",
+                {
+                    "after": {
+                        "scenes": [{
+                            "order": 0,
+                            "handle": 17,
+                            "path": "Assets/Test.unity",
+                            "dirty": False,
+                        }],
+                        "active_handle": 17,
+                        "active_path": unsafe_active_path,
+                    }
+                },
+                {},
+                False,
+                unsafe_active_path,
+            ),
+            (
+                "untrusted failed postcondition",
+                {"failed_postconditions": ["BridgeException at /absolute/secret"]},
+                {},
+                False,
+                "BridgeException at /absolute/secret",
+            ),
+        )
+        for name, evidence_overrides, diagnostic_overrides, drop_diagnostic, secret in cases:
+            with self.subTest(name=name):
+                bridge_response = self._bridge_response(
+                    "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                    evidence_overrides=evidence_overrides or None,
+                    diagnostic_overrides=diagnostic_overrides or None,
+                )
+                if drop_diagnostic:
+                    bridge_response["diagnostics"] = []
+                result, mock_send = self._call_surface(bridge_response)
+
+                self.assertEqual(
+                    (False, "warning", "INSPECTOR_SURFACE_UNAVAILABLE", {}),
+                    (
+                        result["success"],
+                        result["severity"],
+                        result["code"],
+                        result["data"],
+                    ),
+                    msg=f"Malformed Scene evidence fabricated trusted state: {result!r}",
+                )
+                if secret is not None:
+                    self.assertNotIn(
+                        secret,
+                        json.dumps(result),
+                        msg=f"Rejected Scene evidence leaked into the public response: {result!r}",
+                    )
+                _assert_component_surface_request(
+                    mock_send,
+                    expected_project_root=application.to_windows_path("/project"),
+                    asset_path="Assets/Test.unity",
+                    symbol_path="Root/MonoBehaviour(Example)",
+                    include_override_origin=False,
+                )
+
+    def test_scene_parser_rejects_success_and_nonproject_requests(self) -> None:
+        successful = self._bridge_response("EDITOR_CTRL_INSPECTOR_SCENE_DIRTY")
+        successful["success"] = True
+        absolute = self._bridge_response(
+            "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY",
+            asset_path="/absolute/secret.unity",
+        )
+
+        self.assertIsNone(
+            application._parse_scene_lifecycle_evidence(successful, "Assets/Test.unity"),
+            msg="A successful Bridge response must not become a terminal Scene failure.",
+        )
+        self.assertIsNone(
+            application._parse_scene_lifecycle_evidence(
+                absolute,
+                "/absolute/secret.unity",
+            ),
+            msg="Only project-relative Assets paths can be trusted as Scene evidence.",
+        )
+
+    def test_inspect_with_profile_preserves_terminal_scene_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            (project_root / "Assets").mkdir()
+            bridge_response = self._bridge_response("EDITOR_CTRL_INSPECTOR_SCENE_DIRTY")
+            server = create_server(project_root=project_root)
+
+            with patch(
+                "prefab_sentinel.inspector_profiles.application.send_action",
+                return_value=bridge_response,
+            ) as mock_send:
+                result = structured_payload(call_tool_result(
+                    server,
+                    "inspect_with_profile",
+                    {
+                        "asset_path": "Assets/Test.unity",
+                        "symbol_path": "Root/MonoBehaviour(Example)",
+                        "view_name": "overview",
+                    },
+                ))
+
+        message = (
+            "The loaded Scene has unsaved changes; save or discard them before "
+            "inspecting its last-saved serialized surface."
+        )
+        evidence = json.loads(bridge_response["diagnostics"][0]["evidence"])  # type: ignore[index]
+        self.assertEqual(
+            (False, "error", "INSPECTOR_SCENE_DIRTY", message, {}),
+            (
+                result["success"],
+                result["severity"],
+                result["code"],
+                result["message"],
+                result["data"],
+            ),
+            msg=f"Terminal Scene failure was converted to profile workflow state: {result!r}",
+        )
+        self.assertEqual(
+            [{
+                "severity": "error",
+                "code": "INSPECTOR_SCENE_DIRTY",
+                "message": message,
+                "data": {
+                    "path": "Assets/Test.unity",
+                    "location": "none",
+                    "detail": message,
+                    "evidence": evidence,
+                },
+            }],
+            result["diagnostics"],
+            msg=f"Profile inspection changed the terminal Scene diagnostic shape: {result!r}",
+        )
+        _assert_component_surface_request(
+            mock_send,
+            expected_project_root=application.to_windows_path(str(project_root)),
+            asset_path="Assets/Test.unity",
+            symbol_path="Root/MonoBehaviour(Example)",
+            include_override_origin=False,
+        )
+
+    def test_validate_profile_preserves_terminal_scene_failure_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project_root = Path(temporary)
+            (project_root / "Assets").mkdir()
+            draft = project_root / "draft.json"
+            original = json.dumps(_valid_profile())
+            draft.write_text(original, encoding="utf-8")
+            bridge_response = self._bridge_response("EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS")
+            server = create_server(project_root=project_root)
+
+            with patch(
+                "prefab_sentinel.inspector_profiles.application.send_action",
+                return_value=bridge_response,
+            ) as mock_send:
+                result = structured_payload(call_tool_result(
+                    server,
+                    "validate_inspector_profile",
+                    {
+                        "profile_path": str(draft),
+                        "asset_path": "Assets/Test.unity",
+                        "symbol_path": "Root/MonoBehaviour(Example)",
+                    },
+                ))
+
+            observed = draft.read_text(encoding="utf-8")
+
+        message = (
+            "The requested Scene is loaded more than once; close duplicate instances "
+            "before inspecting its serialized surface."
+        )
+        evidence = json.loads(bridge_response["diagnostics"][0]["evidence"])  # type: ignore[index]
+        self.assertEqual(
+            (
+                False,
+                "error",
+                "INSPECTOR_SCENE_AMBIGUOUS",
+                message,
+                {},
+                original,
+            ),
+            (
+                result["success"],
+                result["severity"],
+                result["code"],
+                result["message"],
+                result["data"],
+                observed,
+            ),
+            msg=f"Terminal Scene failure mutated or replaced the profile result: {result!r}",
+        )
+        self.assertEqual(
+            [{
+                "severity": "error",
+                "code": "INSPECTOR_SCENE_AMBIGUOUS",
+                "message": message,
+                "data": {
+                    "path": "Assets/Test.unity",
+                    "location": "none",
+                    "detail": message,
+                    "evidence": evidence,
+                },
+            }],
+            result["diagnostics"],
+            msg=f"Profile validation changed the terminal Scene diagnostic shape: {result!r}",
+        )
+        _assert_component_surface_request(
+            mock_send,
+            expected_project_root=application.to_windows_path(str(project_root)),
+            asset_path="Assets/Test.unity",
+            symbol_path="Root/MonoBehaviour(Example)",
+            include_override_origin=False,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

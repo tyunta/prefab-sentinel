@@ -107,7 +107,7 @@ set_property(
 ### パッチ計画の要点
 
 - `open` モードの `component` は **型名セレクタ**で指定する（例: `SkinnedMeshRenderer`、`UnityEngine.MeshFilter`）。同型が複数あるときは `TypeName@/hierarchy/path` で曖昧性を解消する。YAML の数値 fileID はセレクタに使えない（C# ブリッジは型名で検索する）。
-- `add_component` は **create モード専用**。既存 Prefab へコンポーネントを追加する bridge 操作は無く、open モードで使うと `create-mode operation` エラーになる。既存 Prefab への追加は YAML 直接編集で行う。
+- `patch_apply` の `add_component` op は **create モード専用**で、open モードでは `create-mode operation` エラーになる。既存 Prefab への追加は、別ツールの [`add_component`](../../docs/tools.md#components) の対応条件を確認し、`prefab-sentinel:variant-safe-edit` の事前診断 → dry-run → confirm の経路を使う。対応する MCP 操作が利用できない、または適用条件を確認できない場合は停止し、YAML 直接編集へ迂回しない。
 - 配列操作（`insert_array_element` / `remove_array_element`）の `path` は `m_Array.Array.data` のように `.Array.data` で終わる必要がある（Unity SerializedProperty の規約）。
 - `ObjectReference` の `value` — open モードは `{"guid": "...", "fileID": ...}` 形式または null、create モードは `{"handle": "..."}` でハンドル参照。create モードでハンドル文字列を裸で渡すとランタイムエラーになる。
 - Unity 組み込みリソースの GUID: `0000000000000000e000000000000000`（`unity default resources` — メッシュ Sphere / Cube 等）、`0000000000000000f000000000000000`（`unity_builtin_extra` — マテリアル・シェーダ）。fileID⇔名前の解決は `prefab_sentinel/builtin_assets.py`。

@@ -12,10 +12,12 @@ callers, and the batchmode-era names must not be importable.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import pytest
 
 import prefab_sentinel.bridge_constants as bridge_constants
+import prefab_sentinel.bridge_watch_identity as bridge_watch_identity
 from scripts.check_bridge_constants import main as check_main
 
 # Issue #167: this module invokes the live drift checker against the
@@ -31,6 +33,7 @@ _SURVIVING_NAMES = (
     "UNITY_LOG_FILE_ENV",
     "UNITY_TIMEOUT_SEC_ENV",
     "PROTOCOL_VERSION",
+    "RESPONSE_PUBLICATION_FAILURE_SUFFIX",
     "VALID_SEVERITIES",
     "CONSOLE_LOG_BUFFER_MAX_ENTRIES",
 )
@@ -46,12 +49,53 @@ class BridgeConstantsSyncTests(unittest.TestCase):
     def test_no_drift_in_repository(self) -> None:
         self.assertEqual(0, check_main())
 
+    def test_watch_identity_freshness_is_python_owned(self) -> None:
+        self.assertEqual(
+            5000,
+            bridge_watch_identity.BRIDGE_STATUS_FRESHNESS_MS,
+        )
+
     def test_surviving_exports_are_importable(self) -> None:
         for name in _SURVIVING_NAMES:
             self.assertTrue(
                 hasattr(bridge_constants, name),
                 f"bridge_constants must expose {name}",
             )
+
+
+    def test_response_publication_failure_suffix_matches_csharp(self) -> None:
+        helper_path = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "unity"
+            / "PrefabSentinel.EditorBridge.ResponsePublisher.cs"
+        )
+        helper_source = helper_path.read_text(encoding="utf-8")
+
+        self.assertIn(
+            (
+                'FailureSuffix = "'
+                f'{bridge_constants.RESPONSE_PUBLICATION_FAILURE_SUFFIX}"'
+            ),
+            helper_source,
+        )
+
+
+    def test_file_ipc_protocol_version_is_two(self) -> None:
+        self.assertEqual(2, bridge_constants.PROTOCOL_VERSION)
+
+
+    def test_python_routes_share_the_common_file_ipc_protocol(self) -> None:
+        from prefab_sentinel.services.runtime_validation import config
+        from prefab_sentinel.services.serialized_object.resource_bridge import (
+            UNITY_BRIDGE_PROTOCOL_VERSION,
+        )
+
+        self.assertEqual(
+            bridge_constants.PROTOCOL_VERSION,
+            UNITY_BRIDGE_PROTOCOL_VERSION,
+        )
+        self.assertFalse(hasattr(config, "RUNTIME_PROTOCOL_VERSION"))
 
     def test_batchmode_only_names_are_absent(self) -> None:
         for name in _BATCHMODE_ONLY_NAMES:

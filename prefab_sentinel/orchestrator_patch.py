@@ -130,12 +130,6 @@ def serialized_value_patch_apply(
                 "dry_run": dry_run,
                 "confirm": confirm,
                 "scope": None,
-                "runtime_scene": None,
-                "runtime_profile": "default",
-                "runtime_log_file": None,
-                "runtime_since_timestamp": None,
-                "runtime_allow_warnings": False,
-                "runtime_max_diagnostics": 200,
                 "postcondition_count": 0,
                 "read_only": apply_step is None,
                 "fail_fast_triggered": fail_fast,
@@ -215,12 +209,6 @@ def patch_apply(
     change_reason: str | None = None,
     out_report: str | None = None,
     scope: str | None = None,
-    runtime_scene: str | None = None,
-    runtime_profile: str = "default",
-    runtime_log_file: str | None = None,
-    runtime_since_timestamp: str | None = None,
-    runtime_allow_warnings: bool = False,
-    runtime_max_diagnostics: int = 200,
     transactional: bool = False,
     _transaction_bypass: bool = False,
 ) -> ToolResponse:
@@ -326,12 +314,6 @@ def patch_apply(
                 "dry_run": dry_run,
                 "confirm": confirm,
                 "scope": scope,
-                "runtime_scene": runtime_scene,
-                "runtime_profile": runtime_profile,
-                "runtime_log_file": runtime_log_file,
-                "runtime_since_timestamp": runtime_since_timestamp,
-                "runtime_allow_warnings": runtime_allow_warnings,
-                "runtime_max_diagnostics": runtime_max_diagnostics,
                 "postcondition_count": len(postconditions),
                 "read_only": not write_executed,
                 "fail_fast_triggered": fail_fast,
@@ -423,7 +405,7 @@ def patch_apply(
             target=str(normalized_plan["resources"][0]["path"]),
             out_report=out_report,
             change_reason=transaction_reason,
-            max_diagnostics=runtime_max_diagnostics,
+            max_diagnostics=200,
             apply=lambda: patch_apply(
                 orch=orch,
                 plan=normalized_plan,
@@ -434,12 +416,6 @@ def patch_apply(
                 change_reason=change_reason,
                 out_report=out_report,
                 scope=scope,
-                runtime_scene=runtime_scene,
-                runtime_profile=runtime_profile,
-                runtime_log_file=runtime_log_file,
-                runtime_since_timestamp=runtime_since_timestamp,
-                runtime_allow_warnings=runtime_allow_warnings,
-                runtime_max_diagnostics=runtime_max_diagnostics,
                 _transaction_bypass=True,
             ),
         )
@@ -463,11 +439,21 @@ def patch_apply(
         steps.append(("confirm_gate", confirm_step))
         return _finalize("patch.apply blocked by confirm gate.", fail_fast=False)
 
-    if scope:
+    scope_is_exact_created_resource = (
+        all(
+            str(resource.get("mode", "open")).strip().lower() == "create"
+            for resource, _ in executable_batches
+        )
+        and any(
+            str(resource.get("path", "")) == scope
+            for resource, _ in executable_batches
+        )
+    )
+    if scope and not scope_is_exact_created_resource:
         preflight_refs = orch.reference_resolver.scan_broken_references(
             scope=scope,
             include_diagnostics=False,
-            max_diagnostics=runtime_max_diagnostics,
+            max_diagnostics=200,
         )
         steps.append(("scan_broken_references_preflight", preflight_refs))
         if preflight_refs.severity in (Severity.ERROR, Severity.CRITICAL):
@@ -510,53 +496,6 @@ def patch_apply(
         if not apply_step.success or apply_step.severity in (Severity.ERROR, Severity.CRITICAL):
             return _finalize(
                 "patch.apply stopped by fail-fast policy due to apply failure.",
-                fail_fast=True,
-            )
-
-    if runtime_scene:
-        compile_step = orch.runtime_validation.compile_udonsharp()
-        steps.append(("compile_udonsharp", compile_step))
-        if compile_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize(
-                "patch.apply stopped by fail-fast policy due to UdonSharp compilation errors.",
-                fail_fast=True,
-            )
-
-        run_step = orch.runtime_validation.run_clientsim(runtime_scene, runtime_profile)
-        steps.append(("run_clientsim", run_step))
-        if run_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize(
-                "patch.apply stopped by fail-fast policy due to runtime scene validation errors.",
-                fail_fast=True,
-            )
-
-        collect_step = orch.runtime_validation.collect_unity_console(
-            log_file=runtime_log_file,
-            since_timestamp=runtime_since_timestamp,
-        )
-        classify_step = orch.runtime_validation.classify_errors(
-            log_lines=list(collect_step.data.get("log_lines", [])),
-            max_diagnostics=runtime_max_diagnostics,
-        )
-        assert_step = orch.runtime_validation.assert_no_critical_errors(
-            classification_result=classify_step,
-            allow_warnings=runtime_allow_warnings,
-        )
-        steps.extend(
-            [
-                ("collect_unity_console", collect_step),
-                ("classify_errors", classify_step),
-                ("assert_no_critical_errors", assert_step),
-            ]
-        )
-        if classify_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize(
-                "patch.apply stopped by fail-fast policy due to runtime error classification.",
-                fail_fast=True,
-            )
-        if assert_step.severity in (Severity.ERROR, Severity.CRITICAL):
-            return _finalize(
-                "patch.apply stopped by fail-fast policy due to runtime assertion failure.",
                 fail_fast=True,
             )
 

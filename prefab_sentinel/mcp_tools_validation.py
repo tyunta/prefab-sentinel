@@ -737,16 +737,20 @@ def register_validation_tools(server: MCPServer, session: ProjectSession) -> Non
     @server.tool()
     def validate_runtime(
         asset_path: str,
-        profile: str = "compile_only",
+        profile: str | None = None,
         log_file: str | None = None,
         since_timestamp: str | None = None,
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
         confirm: bool = False,
         change_reason: str | None = None,
-        allow_dirty_before_clientsim: bool = False,
+        out_report: str | None = None,
+        generated_asset_policy: str = "deny",
+        allow_dirty_program_assets_before_compile: bool = False,
+        allow_dirty_scenes_before_compile: bool = False,
+        console_authority: str = "unity_log",
     ) -> dict[str, Any]:
-        """Run the selected Unity runtime-validation pipeline for a scene."""
+        """Run one runtime profile with an explicit compile-only Console authority."""
         orch = session.get_orchestrator()
         resp = orch.validate_runtime(
             scene_path=asset_path,
@@ -757,6 +761,12 @@ def register_validation_tools(server: MCPServer, session: ProjectSession) -> Non
             max_diagnostics=max_diagnostics,
             confirm=confirm,
             change_reason=change_reason,
-            allow_dirty_before_clientsim=allow_dirty_before_clientsim,
+            out_report=out_report,
+            generated_asset_policy=generated_asset_policy,
+            allow_dirty_program_assets_before_compile=(
+                allow_dirty_program_assets_before_compile
+            ),
+            allow_dirty_scenes_before_compile=allow_dirty_scenes_before_compile,
+            console_authority=console_authority,
         )
         return resp.to_dict()

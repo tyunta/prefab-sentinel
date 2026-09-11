@@ -41,8 +41,9 @@ from _bridge_codes import (
     BRIDGE_WATCH_DIR_MISSING,
 )
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
 from prefab_sentinel.patch_plan import (
-    PLAN_VERSION as PROTOCOL_VERSION,
+    PLAN_VERSION,
     bridge_response_state_is_valid,
     iter_resource_batches,
     normalize_patch_plan,
@@ -696,7 +697,7 @@ def _finalize_bridge_plan_response(
             else "Bridge apply failed for one or more resources."
         ),
         "data": {
-            "plan_version": plan.get("plan_version", PROTOCOL_VERSION),
+            "plan_version": plan.get("plan_version", PLAN_VERSION),
             "resource_count": len(resource_batches),
             "op_count": len(plan.get("ops", [])),
             "applied": applied_total,
@@ -739,17 +740,12 @@ def _run_via_editor_bridge(
 
     # Issue #63: the resident EditorBridge dispatches each file-IPC
     # request by its ``action`` field. Without a discriminator the
-    # request lands on EditorBridge's empty-action branch, which replies
-    # with the editor-control protocol version (1); the check in
-    # ``_finalize_unity_response`` below then surfaces a spurious
-    # BRIDGE_PROTOCOL_VERSION mismatch that masks the routing failure.
-    # ``patch_apply`` is unclaimed by the editor-control and runtime
-    # action sets, so a discriminated request falls through to
-    # UnityPatchBridge. ``protocol_version`` is the patch protocol
-    # (PLAN_VERSION) owned by UnityPatchBridge — distinct from the
-    # editor-control protocol; with routing fixed the response carries
-    # the matching patch version, so the protocol check compares like
-    # against like.
+    # request lands on EditorBridge's empty-action branch instead of
+    # UnityPatchBridge. ``patch_apply`` is unclaimed by the editor-control
+    # and runtime action sets, so this discriminator routes the request to
+    # UnityPatchBridge. Every route shares ``PROTOCOL_VERSION`` for the
+    # file-IPC envelope; ``plan_version`` independently versions the patch
+    # plan schema carried inside that envelope.
     request_payload = {
         "action": "patch_apply",
         "protocol_version": PROTOCOL_VERSION,

@@ -55,6 +55,15 @@ public class ActionRegistryTests
         // must never mark an unsupported action asynchronous.
         Assert.Subset(ActionRegistry.Supported, ActionRegistry.Async);
     }
+
+
+    [Fact]
+    public void Promote_Bridge_Bundle_Is_Private_Synchronous_And_Supported()
+    {
+        Assert.Contains("promote_bridge_bundle", ActionRegistry.Private);
+        Assert.Contains("promote_bridge_bundle", ActionRegistry.Supported);
+        Assert.DoesNotContain("promote_bridge_bundle", ActionRegistry.Async);
+    }
 }
 
 /// <summary>
@@ -88,6 +97,9 @@ public class EditorControlRequestTests
         Assert.False(request.wait_for_compile);
         Assert.Equal(0, request.compile_timeout);
         Assert.Equal(0f, request.timeout_sec);
+        Assert.Equal("default", request.test_profile);
+        Assert.False(request.run_live_probes);
+        Assert.Equal(string.Empty, request.run_id);
         Assert.Equal("all", request.classification_filter);
         Assert.Equal("all", request.phase_filter);
         Assert.Equal("single", request.open_scene_mode);
@@ -120,5 +132,18 @@ public class EditorControlRequestTests
         Assert.True(float.IsNaN(request.yaw));
         Assert.True(float.IsNaN(request.pitch));
         Assert.Equal(-1f, request.size);
+    }
+
+
+    [Fact]
+    public void A_Default_Constructed_Request_Carries_Empty_Private_Deploy_Fields()
+    {
+        var request = new EditorControlRequest();
+
+        Assert.Equal(string.Empty, request.deploy_run_id);
+        Assert.Equal(string.Empty, request.deploy_target_path);
+        Assert.Equal(string.Empty, request.deploy_transaction_path);
+        Assert.Equal(string.Empty, request.deploy_manifest_sha256);
+        Assert.Equal(string.Empty, request.deploy_bridge_version);
     }
 }

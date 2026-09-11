@@ -13,9 +13,9 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from prefab_sentinel.patch_plan import PLAN_VERSION
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
 
-UNITY_BRIDGE_PROTOCOL_VERSION = PLAN_VERSION
+UNITY_BRIDGE_PROTOCOL_VERSION = PROTOCOL_VERSION
 
 UNITY_BRIDGE_SUPPORTED_SUFFIXES = {
     ".prefab",

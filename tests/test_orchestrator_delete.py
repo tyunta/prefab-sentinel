@@ -59,6 +59,7 @@ def _scan_response(
 
 class _DeltaResolver:
     def __init__(self) -> None:
+        self.scan_calls = 0
         self._scan_responses = [
             _scan_response(0, [], {"missing_asset": 0}),
             _scan_response(1, ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], {"missing_asset": 1}),
@@ -74,6 +75,7 @@ class _DeltaResolver:
         )
 
     def scan_broken_references(self, *_args, **_kwargs) -> ToolResponse:
+        self.scan_calls += 1
         return self._scan_responses.pop(0)
 
 
@@ -87,6 +89,26 @@ class OrchestratorDeleteTests(unittest.TestCase):
             invalidate_guid_index=MagicMock(),
             invalidate_scope_files_cache=MagicMock(),
         )
+
+    def _confirmed_delete_with_bridge_response(
+        self,
+        bridge_response: dict[str, object],
+    ) -> tuple[ToolResponse, SimpleNamespace, _DeltaResolver]:
+        module = _load_delete_module(self)
+        resolver = _DeltaResolver()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _make_project(root)
+            orch = self._orch(root, resolver=resolver)
+            with patch.object(module, "send_action", return_value=bridge_response):
+                response = module.delete_assets(
+                    orch,
+                    ["Assets/Foo.prefab"],
+                    dry_run=False,
+                    confirm=True,
+                    change_reason="remove obsolete asset",
+                )
+        return response, orch, resolver
 
     def test_delete_assets_dry_run_does_not_contact_editor_bridge(self) -> None:
         module = _load_delete_module(self)
@@ -148,6 +170,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
             with self.subTest(bridge_code=bridge_code):
                 bridge_response: dict[str, object] = {
                     "success": False,
+                    "severity": "error",
                     "code": bridge_code,
                     "message": "watch dir missing",
                     "data": {"bridge_mode": "editor"},
@@ -178,35 +201,147 @@ class OrchestratorDeleteTests(unittest.TestCase):
                 unlink.assert_not_called()
                 remove.assert_not_called()
 
-    def test_bridge_transport_failure_preserves_bridge_error_code(self) -> None:
-        module = _load_delete_module(self)
-        bridge_response = {
+    def test_bridge_transport_failure_preserves_bridge_error_without_side_effects(
+        self,
+    ) -> None:
+        bridge_response: dict[str, object] = {
             "success": False,
+            "severity": "error",
             "code": "EDITOR_BRIDGE_TIMEOUT",
-            "message": "Editor bridge response timed out.",
-            "data": {"action": "delete_assets"},
+            "message": "timed out",
+            "data": {"failed_paths": ["Assets/Foo.prefab"]},
             "diagnostics": [],
         }
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _make_project(root)
-            orch = self._orch(root)
-            with patch.object(module, "send_action", return_value=bridge_response):
-                response = module.delete_assets(
-                    orch,
-                    ["Assets/Foo.prefab"],
-                    dry_run=False,
-                    confirm=True,
-                    change_reason="remove obsolete asset",
+
+        response, orch, resolver = self._confirmed_delete_with_bridge_response(
+            bridge_response
+        )
+
+        self.assertEqual(
+            (False, Severity.ERROR, "EDITOR_BRIDGE_TIMEOUT", "timed out"),
+            (response.success, response.severity, response.code, response.message),
+        )
+        self.assertEqual(bridge_response, response.data["bridge_response"])
+        self.assertEqual(
+            (0, 0, 0, 0),
+            (
+                resolver.scan_calls - 1,
+                orch.invalidate_text_cache.call_count,
+                orch.invalidate_guid_index.call_count,
+                orch.invalidate_scope_files_cache.call_count,
+            ),
+        )
+
+    def test_malformed_delete_responses_do_not_scan_or_invalidate_caches(
+        self,
+    ) -> None:
+        valid_data: dict[str, object] = {
+            "deleted_paths": ["Assets/Foo.prefab"],
+            "failed_paths": [],
+        }
+        malformed_responses: dict[str, dict[str, object]] = {
+            "string success": {
+                "success": "false",
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "malformed success",
+                "data": {
+                    "deleted_paths": [],
+                    "failed_paths": ["Assets/Foo.prefab"],
+                },
+                "diagnostics": [],
+            },
+            "numeric success": {
+                "success": 1,
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "malformed success",
+                "data": {
+                    "deleted_paths": [],
+                    "failed_paths": ["Assets/Foo.prefab"],
+                },
+                "diagnostics": [],
+            },
+            "wrong success code": {
+                "success": True,
+                "severity": "info",
+                "code": "DELETE_ASSETS_UNEXPECTED",
+                "message": "wrong operation code",
+                "data": valid_data,
+                "diagnostics": [],
+            },
+            "non-list deleted paths": {
+                "success": True,
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "invalid deleted paths",
+                "data": {
+                    "deleted_paths": "Assets/Foo.prefab",
+                    "failed_paths": [],
+                },
+                "diagnostics": [],
+            },
+            "non-list failed paths": {
+                "success": True,
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "invalid failed paths",
+                "data": {
+                    "deleted_paths": [],
+                    "failed_paths": {"Assets/Foo.prefab": True},
+                },
+                "diagnostics": [],
+            },
+            "non-string deleted path": {
+                "success": True,
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "invalid deleted path",
+                "data": {
+                    "deleted_paths": [7],
+                    "failed_paths": [],
+                },
+                "diagnostics": [],
+            },
+            "non-string failed path": {
+                "success": True,
+                "severity": "info",
+                "code": "DELETE_ASSETS_OK",
+                "message": "invalid failed path",
+                "data": {
+                    "deleted_paths": [],
+                    "failed_paths": [None],
+                },
+                "diagnostics": [],
+            },
+        }
+
+        for label, bridge_response in malformed_responses.items():
+            with self.subTest(label=label):
+                response, orch, resolver = self._confirmed_delete_with_bridge_response(
+                    bridge_response
                 )
 
-        self.assertEqual((False, "EDITOR_BRIDGE_TIMEOUT"), (response.success, response.code))
-        self.assertEqual("EDITOR_BRIDGE_TIMEOUT", response.data["bridge_code"])
+                self.assertEqual(
+                    (False, Severity.ERROR, "ASSET_DELETE_RESPONSE_SCHEMA"),
+                    (response.success, response.severity, response.code),
+                )
+                self.assertIn("plan", response.data)
+                self.assertEqual(
+                    (0, 0, 0, 0),
+                    (
+                        resolver.scan_calls - 1,
+                        orch.invalidate_text_cache.call_count,
+                        orch.invalidate_guid_index.call_count,
+                        orch.invalidate_scope_files_cache.call_count,
+                    ),
+                )
 
     def test_bridge_delete_assets_failed_code_maps_to_public_contract(self) -> None:
         module = _load_delete_module(self)
         bridge_response = {
             "success": False,
+            "severity": "error",
             "code": "DELETE_ASSETS_FAILED",
             "message": "AssetDatabase.DeleteAssets reported failed paths.",
             "data": {},
@@ -232,6 +367,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
         module = _load_delete_module(self)
         bridge_response = {
             "success": True,
+            "severity": "info",
             "code": "DELETE_ASSETS_OK",
             "message": "deleted",
             "data": {"deleted_paths": ["Assets/Foo.prefab"], "failed_paths": []},
@@ -262,6 +398,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
         module = _load_delete_module(self)
         bridge_response = {
             "success": True,
+            "severity": "info",
             "code": "DELETE_ASSETS_OK",
             "message": "deleted",
             "data": {"deleted_paths": ["Assets/Foo.prefab"], "failed_paths": []},
@@ -288,6 +425,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
         module = _load_delete_module(self)
         bridge_response = {
             "success": True,
+            "severity": "info",
             "code": "DELETE_ASSETS_OK",
             "message": "deleted",
             "data": {"deleted_paths": ["Assets/Foo.prefab"], "failed_paths": []},
@@ -315,6 +453,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
         module = _load_delete_module(self)
         bridge_response = {
             "success": True,
+            "severity": "info",
             "code": "DELETE_ASSETS_OK",
             "message": "deleted",
             "data": {"deleted_paths": ["Assets/Foo.prefab"], "failed_paths": []},
@@ -323,6 +462,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
 
         class ScanFailureResolver(_DeltaResolver):
             def __init__(self) -> None:
+                super().__init__()
                 self._scan_responses = [
                     _scan_response(0, [], {"missing_asset": 0}),
                     ToolResponse(
@@ -355,6 +495,7 @@ class OrchestratorDeleteTests(unittest.TestCase):
         module = _load_delete_module(self)
         bridge_response = {
             "success": True,
+            "severity": "info",
             "code": "DELETE_ASSETS_OK",
             "message": "partial",
             "data": {

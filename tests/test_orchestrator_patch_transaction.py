@@ -558,8 +558,6 @@ class _TransactionTestCase(unittest.TestCase):
         reference_results: list[ToolResponse],
         refresh_status: str = "true",
         plan: dict[str, Any] | None = None,
-        runtime_scene: str | None = None,
-        runtime_compile_result: ToolResponse | None = None,
         postcondition_result: ToolResponse | None = None,
     ) -> tuple[ToolResponse, int]:
         transaction_plan = self._plan() if plan is None else plan
@@ -575,15 +573,8 @@ class _TransactionTestCase(unittest.TestCase):
             for response in (structure_results[0], reference_results[0])
         )
         inner_failure_expected = (
-            (
-                runtime_scene is not None
-                and runtime_compile_result is not None
-                and not runtime_compile_result.success
-            )
-            or (
-                postcondition_result is not None
-                and not postcondition_result.success
-            )
+            postcondition_result is not None
+            and not postcondition_result.success
         )
         with (
             patch.object(
@@ -616,11 +607,6 @@ class _TransactionTestCase(unittest.TestCase):
                 "maybe_auto_refresh",
                 return_value=refresh_status,
             ),
-            patch.object(
-                orch.runtime_validation,
-                "compile_udonsharp",
-                return_value=runtime_compile_result or self._response("COMPILE_OK"),
-            ) as compile_mock,
             patch(
                 "prefab_sentinel.orchestrator_patch.evaluate_postcondition",
                 return_value=postcondition_result or self._response("POSTCONDITION_OK"),
@@ -631,7 +617,6 @@ class _TransactionTestCase(unittest.TestCase):
                 confirm=True,
                 change_reason="Compose nested prefab",
                 out_report=str(report),
-                runtime_scene=runtime_scene,
                 transactional=True,
             )
         post_validation_expected = (
@@ -649,19 +634,10 @@ class _TransactionTestCase(unittest.TestCase):
             post_validation_expected=post_validation_expected,
         )
         self.assertEqual(
-            1 if runtime_scene is not None and nested_apply_expected and apply_result.success else 0,
-            compile_mock.call_count,
-        )
-        self.assertEqual(
             1
             if transaction_plan.get("postconditions")
             and nested_apply_expected
             and apply_result.success
-            and (
-                runtime_scene is None
-                or runtime_compile_result is None
-                or runtime_compile_result.success
-            )
             else 0,
             postcondition_mock.call_count,
         )
@@ -1074,18 +1050,37 @@ class TestPatchTransactionAuditPreflight(unittest.TestCase):
                     transactional=True,
                 )
 
+            transaction = (result.data or {}).get("transaction") or {}
+            self.assertEqual(
+                (
+                    False,
+                    Severity.ERROR,
+                    "PATCH_APPLY_RESULT",
+                    "Patch transaction preimage failed.",
+                    "not_started",
+                    True,
+                    {
+                        "success": True,
+                        "code": "REPORT_WRITTEN",
+                        "error": None,
+                    },
+                ),
+                (
+                    result.success,
+                    result.severity,
+                    result.code,
+                    result.message,
+                    transaction.get("status"),
+                    transaction.get("report_written"),
+                    transaction.get("report_result"),
+                ),
+                msg=f"invalid target returned an incomplete terminal report: {result.to_dict()!r}",
+            )
             persisted = json.loads(report.read_text(encoding="utf-8"))
 
         self.assertEqual(
-            (False, "PATCH_APPLY_RESULT", "not_started", True, 0, result.to_dict()),
-            (
-                result.success,
-                result.code,
-                result.data["transaction"]["status"],
-                result.data["transaction"]["report_written"],
-                apply_mock.call_count,
-                persisted,
-            ),
+            (0, result.to_dict()),
+            (apply_mock.call_count, persisted),
             msg=f"invalid target left a non-terminal audit reservation: {result.to_dict()!r}",
         )
 
@@ -2183,43 +2178,70 @@ class TestSinglePrefabTransactionRollback(_TransactionTestCase):
             )
             self.assertEqual(result.to_dict(), json.loads(report.read_text()))
 
-    def test_runtime_validation_failure_restores_exact_preimage(self) -> None:
+    def test_runtime_validation_runs_separately_after_committed_transaction(self) -> None:
         with TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             assets = project_root / "Assets"
             assets.mkdir()
             target = assets / "Target.prefab"
             target.write_bytes(b"before")
-            report = project_root / "runtime-failure.json"
+            report = project_root / "patch-report.json"
             orch = Phase1Orchestrator.default(project_root)
 
-            result, apply_count = self._execute(
+            patch_result, apply_count = self._execute(
                 orch,
                 target,
                 report,
-                apply_result=self._response("SER_APPLY_OK", data={"applied": 1}),
-                structure_results=[self._response("STRUCTURE_BEFORE")],
-                reference_results=[self._response("REFS_BEFORE")],
-                runtime_scene="Assets/Runtime.unity",
-                runtime_compile_result=self._response(
-                    "RUN_COMPILE_FAILED",
-                    severity=Severity.ERROR,
+                apply_result=self._response(
+                    "SER_APPLY_OK",
+                    data={"applied": 1},
                 ),
+                structure_results=[
+                    self._response("STRUCTURE_BEFORE"),
+                    self._response("STRUCTURE_AFTER"),
+                ],
+                reference_results=[
+                    self._response("REFS_BEFORE"),
+                    self._response("REFS_AFTER"),
+                ],
             )
+            runtime_failure = self._response(
+                "VALIDATE_RUNTIME_RESULT",
+                severity=Severity.ERROR,
+            )
+            with patch.object(
+                Phase1Orchestrator,
+                "validate_runtime",
+                return_value=runtime_failure,
+            ) as validate_runtime:
+                observed_runtime = orch.validate_runtime(
+                    "Assets/Runtime.unity",
+                    profile="clientsim",
+                    out_report="runtime-report.json",
+                    confirm=True,
+                    change_reason="validate committed patch",
+                )
 
-            transaction = result.data["transaction"]
             self.assertEqual(
-                ("rolled_back", True, b"before", 1, "RUN_COMPILE_FAILED"),
+                ("committed", b"after", 1, "VALIDATE_RUNTIME_RESULT"),
                 (
-                    transaction["status"],
-                    transaction["rollback_result"]["success"],
+                    patch_result.data["transaction"]["status"],
                     target.read_bytes(),
                     apply_count,
-                    transaction["original_result"]["data"]["steps"][-1]["result"]["code"],
+                    observed_runtime.code,
                 ),
-                msg=f"runtime failure did not roll back the prefab: {result.to_dict()!r}",
             )
-            self.assertEqual(result.to_dict(), json.loads(report.read_text()))
+            validate_runtime.assert_called_once_with(
+                "Assets/Runtime.unity",
+                profile="clientsim",
+                out_report="runtime-report.json",
+                confirm=True,
+                change_reason="validate committed patch",
+            )
+            self.assertEqual(
+                patch_result.to_dict(),
+                json.loads(report.read_text(encoding="utf-8")),
+            )
 
     def test_postcondition_failure_restores_exact_preimage(self) -> None:
         with TemporaryDirectory() as temp_dir:

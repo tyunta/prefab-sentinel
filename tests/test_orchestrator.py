@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
+from prefab_sentinel.contracts import Severity, ToolResponse
 from prefab_sentinel.orchestrator import Phase1Orchestrator
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
 from tests._orchestrator_mocks import (
@@ -875,179 +875,58 @@ class ValidateRefsTests(unittest.TestCase):
 
 
 class ValidateRuntimeTests(unittest.TestCase):
-    def test_all_steps_succeed(self) -> None:
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
-        orch.runtime_validation.classify_errors.return_value = _ok_response()
-        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
+    def test_facade_preserves_required_profile_envelope(self) -> None:
+        from tests._assertion_helpers import assert_error_envelope
 
-        result = orch.validate_runtime("Assets/Scenes/Test.unity")
-        self.assertTrue(result.success)
-        self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
-        self.assertFalse(result.data["fail_fast_triggered"])
-        # The default profile is compile-only: canvas, compile, collect,
-        # classify, and assert.
-        self.assertEqual(5, len(result.data["steps"]))
-        orch.runtime_validation.run_clientsim.assert_not_called()
+        orchestrator = _make_orchestrator()
 
-    def test_fail_fast_on_run_clientsim_error(self) -> None:
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _error_response()
+        response = orchestrator.validate_runtime("Assets/Scenes/Test.unity")
 
-        result = orch.validate_runtime(
-            "Assets/Scenes/Test.unity",
+        assert_error_envelope(
+            response,
+            code="RUN_PROFILE_REQUIRED",
+            severity="error",
+            field="profile",
+            message_match=r"^profile is required\.$",
+        )
+        orchestrator.runtime_validation.execute_write_profile.assert_not_called()
+
+    def test_facade_forwards_audited_write_profile_controls(self) -> None:
+        orchestrator = _make_orchestrator()
+        expected = _ok_response("VALIDATE_RUNTIME_RESULT")
+
+        with patch(
+            "prefab_sentinel.orchestrator_validation.validate_runtime",
+            return_value=expected,
+        ) as validate:
+            response = orchestrator.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                out_report="Audit/runtime.json",
+                confirm=True,
+                change_reason="runtime audit",
+                generated_asset_policy="replace",
+                allow_dirty_program_assets_before_compile=True,
+                allow_dirty_scenes_before_compile=True,
+            )
+
+        self.assertIs(expected, response)
+        validate.assert_called_once_with(
+            runtime_validation=orchestrator.runtime_validation,
+            scene_path="Assets/Scenes/Test.unity",
             profile="clientsim",
+            log_file=None,
+            since_timestamp=None,
+            allow_warnings=False,
+            max_diagnostics=200,
             confirm=True,
-            change_reason="unit test",
+            change_reason="runtime audit",
+            out_report="Audit/runtime.json",
+            generated_asset_policy="replace",
+            allow_dirty_program_assets_before_compile=True,
+            allow_dirty_scenes_before_compile=True,
+            console_authority="unity_log",
         )
-        self.assertFalse(result.success)
-        self.assertTrue(result.data["fail_fast_triggered"])
-        # Issue #121: WorldSpace-Canvas inspection is the leading step,
-        # so the fail-fast slice now contains 3 entries (was 2).
-        self.assertEqual(3, len(result.data["steps"]))
-        # collect/classify/assert should not be called
-        orch.runtime_validation.collect_unity_console.assert_not_called()
-
-    def test_world_canvas_step_is_first_and_caps_severity(self) -> None:
-        """Issue #121: the leading WorldSpace-Canvas step is named
-        ``inspect_world_canvas`` and its severity is capped at warning so
-        the pipeline continues even when the linter flags a deviation.
-        """
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
-        orch.runtime_validation.classify_errors.return_value = _ok_response()
-        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
-
-        result = orch.validate_runtime("Assets/Scenes/Test.unity")
-        steps = result.data["steps"]
-        self.assertEqual("inspect_world_canvas", steps[0]["step"])
-        # Severity must not exceed warning even when the scene path is
-        # missing — the leading step never aborts the pipeline.
-        self.assertIn(
-            steps[0]["result"]["severity"],
-            {"info", "warning"},
-        )
-
-    @staticmethod
-    def _canvas_diagnostic() -> Diagnostic:
-        return Diagnostic(
-            path="Assets/Scenes/Test.unity",
-            location="123:1",
-            detail="WORLD_CANVAS_LOCAL_SCALE",
-            evidence="Canvas with non-unit local scale violates the WorldSpace setup.",
-        )
-
-    @staticmethod
-    def _classify_diagnostic() -> Diagnostic:
-        return Diagnostic(
-            path="Assets/Scenes/Test.unity",
-            location="",
-            detail="LOG_CLASSIFY_WARNING",
-            evidence="A console line was classified.",
-        )
-
-    @staticmethod
-    def _canvas_step_response(diagnostics: list[Diagnostic]) -> ToolResponse:
-        return ToolResponse(
-            success=True,
-            severity=(Severity.WARNING if diagnostics else Severity.INFO),
-            code="WORLD_CANVAS_INSPECT_OK",
-            message="canvas inspection",
-            data={"scene_path": "Assets/Scenes/Test.unity", "read_only": True},
-            diagnostics=diagnostics,
-        )
-
-    @staticmethod
-    def _classify_step_response(diagnostics: list[Diagnostic]) -> ToolResponse:
-        return ToolResponse(
-            success=True,
-            severity=Severity.INFO,
-            code="OK",
-            message="classify",
-            data={},
-            diagnostics=diagnostics,
-        )
-
-    def test_success_path_promotes_canvas_diagnostic_to_top_level(self) -> None:
-        """Issue #133: when the canvas step emits a diagnostic and the
-        runtime pipeline succeeds, the response's top-level diagnostics
-        list consists of canvas diagnostics followed by classification
-        diagnostics."""
-        canvas_diag = self._canvas_diagnostic()
-        classify_diag = self._classify_diagnostic()
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
-        orch.runtime_validation.classify_errors.return_value = self._classify_step_response([classify_diag])
-        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
-
-        with patch(
-            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
-            return_value=self._canvas_step_response([canvas_diag]),
-        ):
-            result = orch.validate_runtime(
-                "Assets/Scenes/Test.unity",
-                profile="clientsim",
-                confirm=True,
-                change_reason="unit test",
-            )
-
-        self.assertEqual(2, len(result.diagnostics))
-        self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
-        self.assertEqual(classify_diag.detail, result.diagnostics[1].detail)
-
-    def test_fail_fast_path_promotes_canvas_diagnostic_to_top_level(self) -> None:
-        """Issue #133: when the canvas step emits a diagnostic and
-        run-clientsim fails fast, the top-level diagnostics list still
-        carries the canvas diagnostic."""
-        canvas_diag = self._canvas_diagnostic()
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _error_response()
-
-        with patch(
-            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
-            return_value=self._canvas_step_response([canvas_diag]),
-        ):
-            result = orch.validate_runtime(
-                "Assets/Scenes/Test.unity",
-                profile="clientsim",
-                confirm=True,
-                change_reason="unit test",
-            )
-
-        self.assertFalse(result.success)
-        self.assertEqual("VALIDATE_RUNTIME_RESULT", result.code)
-        self.assertTrue(result.data["fail_fast_triggered"])
-        self.assertEqual(1, len(result.diagnostics))
-        self.assertEqual(canvas_diag.detail, result.diagnostics[0].detail)
-
-    def test_success_path_canvas_empty_top_level_equals_classify(self) -> None:
-        """Issue #133: when the canvas step emits no diagnostics, the
-        top-level diagnostics list equals the classification
-        diagnostics."""
-        classify_diag = self._classify_diagnostic()
-        orch = _make_orchestrator()
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
-        orch.runtime_validation.classify_errors.return_value = self._classify_step_response([classify_diag])
-        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
-
-        with patch(
-            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step",
-            return_value=self._canvas_step_response([]),
-        ):
-            result = orch.validate_runtime("Assets/Scenes/Test.unity")
-
-        self.assertEqual(1, len(result.diagnostics))
-        self.assertEqual(classify_diag.detail, result.diagnostics[0].detail)
 
 
 class PostconditionSchemaValidationTests(unittest.TestCase):
@@ -1836,6 +1715,156 @@ class PatchApplyTests(unittest.TestCase):
         step_names = [s["step"] for s in result.data["steps"]]
         self.assertIn("scan_broken_references_preflight", step_names)
 
+    def test_create_mode_skips_missing_target_reference_preflight(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
+            data={"applied": 1},
+        )
+        orch.reference_resolver.scan_broken_references.return_value = _error_response(
+            "REF404",
+        )
+        target = "Assets/Issue167AcceptancePrefabRepair.prefab"
+        plan = self._minimal_plan(kind="prefab", path=target, mode="create")
+
+        result = orch.patch_apply(
+            plan,
+            dry_run=False,
+            confirm=True,
+            scope=target,
+        )
+
+        self.assertEqual(
+            (
+                True,
+                ["dry_run_patch", "apply_and_save"],
+                1,
+                0,
+            ),
+            (
+                result.success,
+                [step["step"] for step in result.data["steps"]],
+                orch.serialized_object.apply_resource_plan.call_count,
+                orch.reference_resolver.scan_broken_references.call_count,
+            ),
+            msg=(
+                "create-mode target absence is expected and must not be scanned "
+                f"before creation: {result.to_dict()!r}"
+            ),
+        )
+
+    def test_create_mode_scans_broader_existing_scope_before_apply(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
+            data={"applied": 1},
+        )
+        orch.reference_resolver.scan_broken_references.return_value = _error_response(
+            "REF_SCAN_FAILED",
+            data={"categories": {"missing_asset": 1}},
+        )
+        target = "Assets/Issue167AcceptancePrefabRepair.prefab"
+        plan = self._minimal_plan(kind="prefab", path=target, mode="create")
+
+        result = orch.patch_apply(
+            plan,
+            dry_run=False,
+            confirm=True,
+            scope="Assets/",
+        )
+
+        self.assertEqual(
+            (
+                False,
+                "REF001",
+                ["dry_run_patch", "scan_broken_references_preflight"],
+                1,
+                0,
+            ),
+            (
+                result.success,
+                result.code,
+                [step["step"] for step in result.data["steps"]],
+                orch.reference_resolver.scan_broken_references.call_count,
+                orch.serialized_object.apply_resource_plan.call_count,
+            ),
+            msg=(
+                "an existing broader scope must be scanned before an all-create "
+                f"plan can mutate: {result.to_dict()!r}"
+            ),
+        )
+
+    def test_mixed_create_and_open_resources_keep_reference_preflight(self) -> None:
+        orch = self._make_orch_with_dry_run()
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
+            data={"applied": 1},
+        )
+        orch.reference_resolver.scan_broken_references.return_value = _ok_response(
+            "REF_SCAN_OK",
+        )
+        plan = {
+            "plan_version": 2,
+            "resources": [
+                {
+                    "id": "created",
+                    "path": "Assets/Created.json",
+                    "kind": "json",
+                    "mode": "create",
+                },
+                {
+                    "id": "opened",
+                    "path": "Assets/Opened.json",
+                    "kind": "json",
+                    "mode": "open",
+                },
+            ],
+            "ops": [
+                {
+                    "resource": "created",
+                    "op": "set",
+                    "property_path": "key",
+                    "value": "created",
+                },
+                {
+                    "resource": "opened",
+                    "op": "set",
+                    "property_path": "key",
+                    "value": "opened",
+                },
+            ],
+            "postconditions": [],
+        }
+
+        result = orch.patch_apply(
+            plan,
+            dry_run=False,
+            confirm=True,
+            scope="Assets/",
+        )
+
+        self.assertEqual(
+            (
+                True,
+                [
+                    "dry_run_patch:created",
+                    "dry_run_patch:opened",
+                    "scan_broken_references_preflight",
+                    "apply_and_save:created",
+                    "apply_and_save:opened",
+                ],
+                1,
+                2,
+            ),
+            (
+                result.success,
+                [step["step"] for step in result.data["steps"]],
+                orch.reference_resolver.scan_broken_references.call_count,
+                orch.serialized_object.apply_resource_plan.call_count,
+            ),
+            msg=(
+                "an open resource keeps the shared reference preflight even "
+                f"when the plan also creates a resource: {result.to_dict()!r}"
+            ),
+        )
+
     def test_no_preflight_ref_scan_when_no_scope(self) -> None:
         orch = self._make_orch_with_dry_run()
         orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
@@ -1881,55 +1910,44 @@ class PatchApplyTests(unittest.TestCase):
         step_names = [s["step"] for s in result.data["steps"]]
         self.assertNotIn("list_overrides_preflight", step_names)
 
-    def test_runtime_validation_when_scene_set(self) -> None:
+    def test_runtime_validation_is_a_separate_operation_after_patch(self) -> None:
         orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
-        orch.runtime_validation.compile_udonsharp.return_value = _ok_response()
-        orch.runtime_validation.run_clientsim.return_value = _ok_response()
-        orch.runtime_validation.collect_unity_console.return_value = _ok_response(data={"log_lines": []})
-        orch.runtime_validation.classify_errors.return_value = _ok_response()
-        orch.runtime_validation.assert_no_critical_errors.return_value = _ok_response()
-
-        result = orch.patch_apply(
-            self._minimal_plan(),
-            dry_run=False,
-            confirm=True,
-            runtime_scene="Assets/Scenes/Test.unity",
+        orch.serialized_object.apply_resource_plan.return_value = _ok_response(
+            data={"applied": 1}
         )
-        step_names = [s["step"] for s in result.data["steps"]]
-        self.assertIn("compile_udonsharp", step_names)
-        self.assertIn("run_clientsim", step_names)
+        runtime_response = _ok_response("VALIDATE_RUNTIME_RESULT")
 
-    def test_compile_failure_stops_before_clientsim(self) -> None:
-        orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
-        orch.runtime_validation.compile_udonsharp.return_value = _error_response()
+        with patch.object(
+            orch,
+            "validate_runtime",
+            return_value=runtime_response,
+        ) as validate_runtime:
+            patch_result = orch.patch_apply(
+                self._minimal_plan(),
+                dry_run=False,
+                confirm=True,
+            )
+            observed_runtime = orch.validate_runtime(
+                "Assets/Scenes/Test.unity",
+                profile="clientsim",
+                out_report="Audit/runtime.json",
+                confirm=True,
+                change_reason="validate committed patch",
+            )
 
-        result = orch.patch_apply(
-            self._minimal_plan(),
-            dry_run=False,
-            confirm=True,
-            runtime_scene="Assets/Scenes/Test.unity",
-        )
-
+        self.assertTrue(patch_result.success)
+        self.assertIs(runtime_response, observed_runtime)
         self.assertEqual(
-            (False, True, ["dry_run_patch", "apply_and_save", "compile_udonsharp"]),
-            (
-                result.success,
-                result.data["fail_fast_triggered"],
-                [step["step"] for step in result.data["steps"]],
-            ),
-            msg=f"compile failure must terminate runtime validation immediately: {result.to_dict()!r}",
+            ["dry_run_patch", "apply_and_save"],
+            [step["step"] for step in patch_result.data["steps"]],
         )
-        orch.runtime_validation.run_clientsim.assert_not_called()
-        orch.runtime_validation.collect_unity_console.assert_not_called()
-
-    def test_no_runtime_validation_when_no_scene(self) -> None:
-        orch = self._make_orch_with_dry_run()
-        orch.serialized_object.apply_resource_plan.return_value = _ok_response(data={"applied": 1})
-        result = orch.patch_apply(self._minimal_plan(), dry_run=False, confirm=True, runtime_scene=None)
-        step_names = [s["step"] for s in result.data["steps"]]
-        self.assertNotIn("compile_udonsharp", step_names)
+        validate_runtime.assert_called_once_with(
+            "Assets/Scenes/Test.unity",
+            profile="clientsim",
+            out_report="Audit/runtime.json",
+            confirm=True,
+            change_reason="validate committed patch",
+        )
 
     def test_execution_id_and_timestamp(self) -> None:
         orch = self._make_orch_with_dry_run()

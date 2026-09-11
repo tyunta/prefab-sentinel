@@ -11,7 +11,6 @@ Requires:
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import os
 import time
@@ -20,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel import bridge_response_publication as response_publication
 from prefab_sentinel.bridge_constants import (
     BRIDGE_WATCH_DIR_ENV,
     PROTOCOL_VERSION,
@@ -30,8 +30,13 @@ from prefab_sentinel.bridge_constants import (
 # request/response envelopes (drift-checked against ``bridge_constants`` as
 # the single source of truth).
 # Empirical: sufficient for typical Inspector operations in loaded projects
+from prefab_sentinel.bridge_response import is_bridge_response_envelope
+from prefab_sentinel.bridge_response_io import (
+    BridgeResponseReadError,
+    read_bridge_response_file,
+)
 from prefab_sentinel.editor_status_blockers import classify_tool_error_blocker
-from prefab_sentinel.json_io import dump_json, load_json
+from prefab_sentinel.json_io import dump_json
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,6 +45,7 @@ DEFAULT_TIMEOUT_SEC = 30
 _last_bridge_version: str | None = None
 _expected_project_root_provider: Callable[[], str | None] | None = None
 _EXPECTED_PROJECT_ROOT_UNSET = object()
+_WATCH_DIRECTORY_UNSET = object()
 DEFAULT_POLL_INTERVAL = 1.0
 
 SUPPORTED_ACTIONS = frozenset(
@@ -304,73 +310,102 @@ def _try_delete(path: Path) -> None:
 _BRIDGE_SETUP_HINT = f" Set {BRIDGE_WATCH_DIR_ENV}=<path>. See README 'Unity Bridge セットアップ' section."
 
 
-def check_editor_bridge_env() -> dict[str, Any] | None:
-    """Return an error response if editor bridge env is not configured, else None."""
-    watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
-    if not watch_dir:
+def check_editor_bridge_env(
+    watch_dir: Path | None | object = _WATCH_DIRECTORY_UNSET,
+) -> dict[str, Any] | None:
+    """Return an error response unless the captured watch directory is usable."""
+    if watch_dir is _WATCH_DIRECTORY_UNSET:
+        watch_dir_raw = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
+        watch_path = (
+            Path(to_wsl_path(watch_dir_raw))
+            if watch_dir_raw
+            else None
+        )
+    elif isinstance(watch_dir, Path):
+        watch_path = watch_dir
+    else:
+        watch_path = None
+
+    if watch_path is None:
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_MISSING",
-            message=f"Editor Bridge not connected: {BRIDGE_WATCH_DIR_ENV} is not set.{_BRIDGE_SETUP_HINT}",
+            message=(
+                f"Editor Bridge not connected: {BRIDGE_WATCH_DIR_ENV} is not set."
+                f"{_BRIDGE_SETUP_HINT}"
+            ),
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
-    watch_path = Path(to_wsl_path(watch_dir))
+
     try:
         watch_dir_exists = watch_path.is_dir()
     except OSError:
-        _LOGGER.error("Editor Bridge watch directory status probe failed")
+        _LOGGER.exception(
+            "Editor Bridge watch directory status probe failed for %s",
+            watch_path,
+        )
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
-            message=f"Editor Bridge watch directory status is unavailable.{_BRIDGE_SETUP_HINT}",
+            message=(
+                "Editor Bridge watch directory status is unavailable."
+                f"{_BRIDGE_SETUP_HINT}"
+            ),
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
     if not watch_dir_exists:
         return _error_response(
             code="EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
-            message=f"Editor Bridge watch directory does not exist.{_BRIDGE_SETUP_HINT}",
+            message=(
+                "Editor Bridge watch directory does not exist."
+                f"{_BRIDGE_SETUP_HINT}"
+            ),
             data={"env_var": BRIDGE_WATCH_DIR_ENV},
         )
     return None
 
 
-def send_action(
+_PRIVATE_DEPLOY_ACTIONS = frozenset({"promote_bridge_bundle"})
+
+PRIVATE_ACCEPTANCE_ACTIONS = frozenset(
+    {
+        "run_integration_tests",
+        "acceptance_status",
+        "cleanup_integration_tests",
+    }
+)
+
+
+def _send_bridge_action(
     *,
     action: str,
+    allowed_actions: frozenset[str] | set[str],
+    publication_state: dict[str, bool] | None = None,
     timeout_sec: int | None = None,
     request_extras: dict[str, Any] | None = None,
     expected_project_root: str | None | object = _EXPECTED_PROJECT_ROOT_UNSET,
+    watch_dir: str | Path | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Send an editor-control action and wait for the response.
-
-    Parameters
-    ----------
-    action:
-        One of SUPPORTED_ACTIONS.
-    timeout_sec:
-        Override transport-level poll timeout (default: env or 30s).
-    request_extras:
-        Optional mapping merged into the request JSON after ``kwargs``.
-        Used when a request payload field collides with one of this
-        function's named parameters (notably ``timeout_sec``, which the
-        synchronous recompile-and-wait action requires as a payload field).
-    expected_project_root:
-        Resolved Unity project root expected by the active MCP session.
-        Successful bridge responses must carry a matching actual root in
-        ``operator_context.project_root`` when this value is provided.
-    **kwargs:
-        Additional fields merged into the request JSON.
-    """
-    env_err = check_editor_bridge_env()
+    watch_dir_raw = (
+        os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
+        if watch_dir is None
+        else str(watch_dir)
+    )
+    watch_dir = Path(to_wsl_path(watch_dir_raw)) if watch_dir_raw else None
+    env_err = check_editor_bridge_env(watch_dir)
     if env_err is not None:
         return env_err
+    if watch_dir is None:
+        raise AssertionError("validated watch directory identity is required")
 
-    if action not in SUPPORTED_ACTIONS:
+    if action not in allowed_actions:
         return _error_response(
             code="EDITOR_BRIDGE_UNKNOWN_ACTION",
-            message=f"Unknown action: {action}. Supported: {', '.join(sorted(SUPPORTED_ACTIONS))}",
+            message=(
+                f"Unknown action: {action}. "
+                f"Supported: {', '.join(sorted(allowed_actions))}"
+            ),
         )
 
-    watch_dir = Path(to_wsl_path(os.environ[BRIDGE_WATCH_DIR_ENV]))
     if timeout_sec is None:
         timeout_raw = os.environ.get(BRIDGE_TIMEOUT_ENV, str(DEFAULT_TIMEOUT_SEC))
         try:
@@ -391,6 +426,9 @@ def send_action(
     request_id = uuid.uuid4().hex
     request_file = watch_dir / f"{request_id}.request.json"
     response_file = watch_dir / f"{request_id}.response.json"
+    response_tmp_file, publication_failure_file = (
+        response_publication.publication_artifact_paths(watch_dir, request_id)
+    )
     tmp_file = Path(str(request_file) + ".tmp")
 
     resolved_expected_project_root = _expected_project_root(expected_project_root)
@@ -404,8 +442,7 @@ def send_action(
     if resolved_expected_project_root is not None:
         request_payload["expected_project_root"] = resolved_expected_project_root
 
-    # Atomic write uses .tmp plus rename to avoid partial reads by the watcher.
-    env_err = check_editor_bridge_env()
+    env_err = check_editor_bridge_env(watch_dir)
     if env_err is not None:
         return env_err
     try:
@@ -414,8 +451,13 @@ def send_action(
             encoding="utf-8",
         )
         tmp_file.rename(request_file)
+        if publication_state is not None:
+            publication_state["request_published"] = True
     except OSError:
-        _LOGGER.error("Editor Bridge request write failed")
+        _LOGGER.exception(
+            "Editor Bridge request write failed for %s",
+            request_file,
+        )
         _try_delete(tmp_file)
         return _error_response(
             code="EDITOR_BRIDGE_WRITE",
@@ -427,8 +469,12 @@ def send_action(
         while time.monotonic() < deadline:
             try:
                 response_ready = response_file.exists()
+                publication_failed = publication_failure_file.exists()
             except OSError:
-                _LOGGER.error("Editor Bridge response status probe failed")
+                _LOGGER.exception(
+                    "Editor Bridge response status probe failed for %s",
+                    response_file,
+                )
                 _try_delete(response_file)
                 return _error_response(
                     code="EDITOR_BRIDGE_RESPONSE_READ",
@@ -436,10 +482,12 @@ def send_action(
                 )
             if response_ready:
                 try:
-                    raw = response_file.read_text(encoding="utf-8")
-                    payload = load_json(raw)
-                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                    _LOGGER.error("Editor Bridge response read failed")
+                    payload = read_bridge_response_file(response_file)
+                except BridgeResponseReadError:
+                    _LOGGER.exception(
+                        "Editor Bridge response read failed for %s",
+                        response_file,
+                    )
                     return _error_response(
                         code="EDITOR_BRIDGE_RESPONSE_READ",
                         message="Editor bridge response file could not be read.",
@@ -447,25 +495,23 @@ def send_action(
                 finally:
                     _try_delete(response_file)
 
-                if not isinstance(payload, dict):
+                if not is_bridge_response_envelope(payload):
                     return _error_response(
                         code="EDITOR_BRIDGE_RESPONSE_SCHEMA",
-                        message="Editor bridge response root must be an object.",
+                        message="Editor bridge response envelope is invalid.",
+                    )
+                if (
+                    type(payload.get("protocol_version")) is not int
+                    or payload["protocol_version"] != PROTOCOL_VERSION
+                ):
+                    return _error_response(
+                        code="EDITOR_BRIDGE_RESPONSE_SCHEMA",
+                        message="Editor bridge response protocol version is invalid.",
                     )
 
-                # ``bridge_mode`` is always "editor" since the batchmode dispatch
-                # path was removed in issue #270; the field is retained as a stable
-                # transport tag for response-shape callers and pinned by tests.
                 payload.setdefault("bridge_mode", "editor")
                 payload.setdefault("action", action)
-                # Issue #94: this is the file-transport request id used by the
-                # bridge to tag log entries captured during the request. Expose it
-                # so callers can pass it to editor_console(since_request_id=...).
                 payload.setdefault("request_id", request_id)
-
-                global _last_bridge_version
-                if "bridge_version" in payload:
-                    _last_bridge_version = payload["bridge_version"]
 
                 verified_request_id = str(payload["request_id"])
                 mismatch = _verify_expected_project_root(
@@ -477,7 +523,23 @@ def send_action(
                 if mismatch is not None:
                     return mismatch
 
+                bridge_version = payload.get("bridge_version")
+                if (
+                    payload["success"] is True
+                    and isinstance(bridge_version, str)
+                    and bridge_version
+                ):
+                    global _last_bridge_version
+                    _last_bridge_version = bridge_version
+
                 return _enrich_bridge_error_response(payload)
+
+            if publication_failed:
+                return response_publication.editor_failure_response(
+                    action,
+                    (response_file, response_tmp_file, publication_failure_file),
+                    _try_delete,
+                )
 
             time.sleep(DEFAULT_POLL_INTERVAL)
 
@@ -490,27 +552,110 @@ def send_action(
         _try_delete(request_file)
 
 
-def bridge_status() -> dict[str, Any]:
-    """Return current bridge connection status without making a request.
+def send_private_acceptance_action(
+    *,
+    action: str,
+    timeout_sec: int | None = None,
+    request_extras: dict[str, Any] | None = None,
+    expected_project_root: str | None | object = _EXPECTED_PROJECT_ROOT_UNSET,
+    watch_dir: str | Path | None = None,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send one fixed private acceptance action over the existing file IPC."""
+    return _send_bridge_action(
+        action=action,
+        allowed_actions=PRIVATE_ACCEPTANCE_ACTIONS,
+        timeout_sec=timeout_sec,
+        request_extras=request_extras,
+        expected_project_root=expected_project_root,
+        watch_dir=watch_dir,
+        **kwargs,
+    )
 
-    Checks the watch directory env var and its on-disk existence only.
-    Does not attempt an actual bridge request (no I/O cost).
-    """
-    watch_dir = os.environ.get(BRIDGE_WATCH_DIR_ENV, "")
-    connected = False
-    status_error: str | None = None
-    if watch_dir:
-        try:
-            connected = Path(to_wsl_path(watch_dir)).is_dir()
-        except OSError as exc:
-            status_error = str(exc)
-    status: dict[str, Any] = {
-        "connected": connected,
-        "watch_dir": watch_dir or None,
+
+def send_private_deploy_action(
+    *,
+    action: str,
+    deploy_run_id: str,
+    deploy_target_path: str,
+    deploy_transaction_path: str,
+    deploy_manifest_sha256: str,
+    deploy_bridge_version: str,
+) -> dict[str, Any]:
+    """Send the sole private Bridge deployment action over file IPC."""
+    publication_state = {"request_published": False}
+    if action not in _PRIVATE_DEPLOY_ACTIONS:
+        response = _error_response(
+            code="EDITOR_BRIDGE_UNKNOWN_ACTION",
+            message=(
+                f"Unknown private deploy action: {action}. "
+                f"Supported: {', '.join(sorted(_PRIVATE_DEPLOY_ACTIONS))}"
+            ),
+        )
+    else:
+        response = _send_bridge_action(
+            action=action,
+            allowed_actions=_PRIVATE_DEPLOY_ACTIONS,
+            publication_state=publication_state,
+            deploy_run_id=deploy_run_id,
+            deploy_target_path=deploy_target_path,
+            deploy_transaction_path=deploy_transaction_path,
+            deploy_manifest_sha256=deploy_manifest_sha256,
+            deploy_bridge_version=deploy_bridge_version,
+        )
+    return {
+        **response,
+        "_request_published": publication_state["request_published"],
     }
-    if status_error is not None:
-        status["watch_dir_status_error"] = status_error
-    return status
+
+def send_action(
+    *,
+    action: str,
+    timeout_sec: int | None = None,
+    request_extras: dict[str, Any] | None = None,
+    expected_project_root: str | None | object = _EXPECTED_PROJECT_ROOT_UNSET,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """Send a public editor-control action and wait for the response."""
+    return _send_bridge_action(
+        action=action,
+        allowed_actions=SUPPORTED_ACTIONS,
+        timeout_sec=timeout_sec,
+        request_extras=request_extras,
+        expected_project_root=expected_project_root,
+        **kwargs,
+    )
+
+
+def bridge_status(
+    watch_dir: Path | None | object = _WATCH_DIRECTORY_UNSET,
+) -> dict[str, Any]:
+    """Return the public Bridge connection/configuration projection."""
+    error = check_editor_bridge_env(watch_dir)
+    if error is None:
+        return {
+            "connected": True,
+            "connection_state": "connected",
+            "code": None,
+            "blocker_class": None,
+            "suggested_next_action": None,
+        }
+
+    code_value = error.get("code")
+    code = code_value if isinstance(code_value, str) else "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND"
+    data_value = error.get("data")
+    data = data_value if isinstance(data_value, dict) else {}
+    return {
+        "connected": False,
+        "connection_state": (
+            "not_configured"
+            if code == "EDITOR_BRIDGE_WATCH_DIR_MISSING"
+            else "unavailable"
+        ),
+        "code": code,
+        "blocker_class": data.get("blocker_class"),
+        "suggested_next_action": data.get("suggested_next_action"),
+    }
 
 
 def get_last_bridge_version() -> str | None:

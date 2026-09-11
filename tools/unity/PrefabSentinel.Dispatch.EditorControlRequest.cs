@@ -179,6 +179,11 @@ namespace PrefabSentinel
         // Issue #118: synchronous recompile-and-wait budget, in seconds.
         public float timeout_sec = 0f;
 
+        // Issue #186: explicit integration-test profile selection.
+        public string test_profile = "default";
+        public bool run_live_probes = false;
+        public string run_id = string.Empty;
+
         // Issue #239: phase filter selector for the console capture surface.
         public string phase_filter = "all";
         public long since_sequence = -1;
@@ -235,5 +240,12 @@ namespace PrefabSentinel
         // Issue #243 / #53: AnimationClip authoring payload.
         public string curves_json = string.Empty;
         public string target_hierarchy_path = string.Empty;
+
+        // Issue #193: fixed private Bridge bundle promotion payload.
+        public string deploy_run_id = string.Empty;
+        public string deploy_target_path = string.Empty;
+        public string deploy_transaction_path = string.Empty;
+        public string deploy_manifest_sha256 = string.Empty;
+        public string deploy_bridge_version = string.Empty;
     }
 }

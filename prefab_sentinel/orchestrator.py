@@ -674,26 +674,36 @@ class Phase1Orchestrator:
     def validate_runtime(
         self,
         scene_path: str,
-        profile: str = "compile_only",
+        profile: str | None = None,
         log_file: str | None = None,
         since_timestamp: str | None = None,
         allow_warnings: bool = False,
         max_diagnostics: int = 200,
         confirm: bool = False,
         change_reason: str | None = None,
-        allow_dirty_before_clientsim: bool = False,
+        out_report: str | None = None,
+        generated_asset_policy: str = "deny",
+        allow_dirty_program_assets_before_compile: bool = False,
+        allow_dirty_scenes_before_compile: bool = False,
+        console_authority: str = "unity_log",
     ) -> ToolResponse:
         return orchestrator_validation.validate_runtime(
-            self.runtime_validation,
-            scene_path,
-            profile,
-            log_file,
-            since_timestamp,
-            allow_warnings,
-            max_diagnostics,
-            confirm,
-            change_reason,
-            allow_dirty_before_clientsim,
+            runtime_validation=self.runtime_validation,
+            scene_path=scene_path,
+            profile=profile,
+            log_file=log_file,
+            since_timestamp=since_timestamp,
+            allow_warnings=allow_warnings,
+            max_diagnostics=max_diagnostics,
+            confirm=confirm,
+            change_reason=change_reason,
+            out_report=out_report,
+            generated_asset_policy=generated_asset_policy,
+            allow_dirty_program_assets_before_compile=(
+                allow_dirty_program_assets_before_compile
+            ),
+            allow_dirty_scenes_before_compile=allow_dirty_scenes_before_compile,
+            console_authority=console_authority,
         )
 
     # ------------------------------------------------------------------
@@ -727,41 +737,18 @@ class Phase1Orchestrator:
         change_reason: str | None = None,
         out_report: str | None = None,
         scope: str | None = None,
-        runtime_scene: str | None = None,
-        runtime_profile: str = "default",
-        runtime_log_file: str | None = None,
-        runtime_since_timestamp: str | None = None,
-        runtime_allow_warnings: bool = False,
-        runtime_max_diagnostics: int = 200,
         transactional: bool = False,
     ) -> ToolResponse:
-        """Execute a patch plan through dry-run, apply, and optional post-validation.
-
-        Args:
-            plan: Normalized patch plan dict with ``resources`` and ``ops``.
-            dry_run: When ``True``, validate the plan without applying changes.
-            confirm: Required to be ``True`` for actual writes (safety gate).
-            plan_sha256: Optional SHA-256 digest for plan integrity verification.
-            plan_signature: Optional signature for signed execution plans.
-            change_reason: Human-readable reason for the change (audit trail).
-            out_report: Audit report path for eligible open-Prefab transactions.
-            scope: Scope path for optional post-apply reference validation.
-            runtime_scene: Scene path for optional post-apply runtime validation.
-            runtime_profile: ClientSim profile for runtime validation.
-            runtime_log_file: Explicit log file path for runtime validation.
-            runtime_since_timestamp: Log timestamp filter for runtime validation.
-            runtime_allow_warnings: Allow warnings in runtime assertion.
-            runtime_max_diagnostics: Cap on runtime diagnostic entries.
-            transactional: Enables the public one-open-Prefab transaction contract.
-
-        Returns:
-            ``ToolResponse`` with ``data.steps`` containing dry_run_patch,
-            apply_and_save, and optional validate_refs / validate_runtime
-            sub-step results. ``data.execution_id`` provides the audit key.
-        """
+        """Execute patch mutation; run runtime validation separately."""
         return orchestrator_patch.patch_apply(
-            self, plan, dry_run, confirm, plan_sha256, plan_signature,
-            change_reason, out_report, scope, runtime_scene, runtime_profile,
-            runtime_log_file, runtime_since_timestamp, runtime_allow_warnings,
-            runtime_max_diagnostics, transactional,
+            self,
+            plan,
+            dry_run,
+            confirm,
+            plan_sha256,
+            plan_signature,
+            change_reason,
+            out_report,
+            scope,
+            transactional,
         )

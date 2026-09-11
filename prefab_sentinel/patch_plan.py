@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
 from prefab_sentinel.json_io import load_json_file
 
 PLAN_VERSION = 2
@@ -213,7 +214,7 @@ def build_bridge_request(plan: dict[str, Any]) -> dict[str, Any]:
     this function must not populate that key even for single-resource plans.
     """
     return {
-        "protocol_version": PLAN_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "plan_version": PLAN_VERSION,
         "resources": deepcopy(plan.get("resources", [])),
         "ops": deepcopy(plan.get("ops", [])),
@@ -313,7 +314,7 @@ def bridge_plan_response_data_is_valid(
     executed = [resource for resource in resources if resource["executed"]]
     return (
         data["plan_version"] == PLAN_VERSION
-        and data["protocol_version"] == PLAN_VERSION
+        and data["protocol_version"] == PROTOCOL_VERSION
         and data["resource_count"] == len(resources) >= 2
         and data["op_count"] == op_count
         and sum(resource["op_count"] for resource in resources) == op_count

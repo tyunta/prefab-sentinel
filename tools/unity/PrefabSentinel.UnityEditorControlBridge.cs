@@ -18,10 +18,13 @@ namespace PrefabSentinel
     /// </summary>
     public static partial class UnityEditorControlBridge
     {
-        public const int ProtocolVersion = 1;
-        public const string BridgeVersion = "0.9.1";
+        public const int ProtocolVersion = 2;
+        public const string BridgeVersion = "0.10.0";
+        private const string BridgeInstanceIdSessionKey =
+            "PrefabSentinel.EditorBridge.InstanceId";
         private static readonly string BridgeSessionId = Guid.NewGuid().ToString("N");
-        private static readonly string BridgeInstanceId = Guid.NewGuid().ToString("N");
+        private static readonly string BridgeInstanceId =
+            InitializeBridgeInstanceId();
 
         /// <summary>Actions that write their response file asynchronously (not on return).</summary>
         // Issue H-8: the membership sets are owned by ``ActionRegistry`` as the
@@ -39,6 +42,38 @@ namespace PrefabSentinel
         // Request / Response DTOs — the EditorControlRequest DTO is
         // relocated to PrefabSentinel.Dispatch.EditorControlRequest.cs (issue
         // H-8) so the Unity-free xUnit harness can construct it directly.
+
+        internal static string CurrentBridgeSessionId => BridgeSessionId;
+        internal static string CurrentBridgeInstanceId => BridgeInstanceId;
+
+        private static string InitializeBridgeInstanceId()
+        {
+            string existing = SessionState.GetString(
+                BridgeInstanceIdSessionKey,
+                string.Empty);
+            if (IsValidBridgeIdentity(existing))
+                return existing;
+
+            string generated = Guid.NewGuid().ToString("N");
+            SessionState.SetString(BridgeInstanceIdSessionKey, generated);
+            return generated;
+        }
+
+        private static bool IsValidBridgeIdentity(string value)
+        {
+            if (value == null || value.Length != 32)
+                return false;
+            for (int index = 0; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (!((character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f')))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         [Serializable]
         public sealed class EditorControlDiagnostic
@@ -236,6 +271,21 @@ namespace PrefabSentinel
             public float budget_sec = 0f;
             public bool job_retained = false;
             public bool cleanup_performed = false;
+            public bool cleanup_required = false;
+
+            // Issue #186: bounded local Unity acceptance evidence.
+            public string run_id = string.Empty;
+            public bool fixture_owned = false;
+            public string lease_phase = string.Empty;
+            public int acceptance_total = 0;
+            public int acceptance_passed = 0;
+            public int acceptance_failed = 0;
+            public AcceptanceCaseEvidence[] acceptance_cases =
+                Array.Empty<AcceptanceCaseEvidence>();
+            public bool scene_setup_restored = false;
+            public int deleted_fixture_count = 0;
+            public int deleted_request_artifact_count = 0;
+            public bool lease_removed = false;
 
             // Issue #116: AssetDatabase-backed generated asset create/move.
             public string asset_type = string.Empty;
@@ -425,6 +475,25 @@ namespace PrefabSentinel
             public float frame_rate = 60f;
             public int curve_count = 0;
             public int applied_curve_count = 0;
+
+            // Issue #193: path-free private Bridge promotion evidence.
+            public string promotion_state = "not_attempted";
+            public bool barrier_used = false;
+            public bool rollback_attempted = false;
+            public bool rollback_restored = false;
+            public bool backup_retained = false;
+            public bool target_complete = false;
+            public string manifest_sha256 = string.Empty;
+            public string bridge_version = string.Empty;
+        }
+
+
+        [Serializable]
+        public sealed class AcceptanceCaseEvidence
+        {
+            public string name = string.Empty;
+            public bool passed = false;
+            public string code = string.Empty;
         }
 
         // Issue #249: integer rectangle returned alongside the resolved
@@ -632,6 +701,9 @@ private static string DeriveTransportRequestId(string requestPath)
                 case "delete_assets":
                     response = HandleDeleteAssets(request);
                     break;
+                case "promote_bridge_bundle":
+                    response = HandlePromoteBridgeBundle(request);
+                    break;
                 case "create_generated_asset":
                     response = HandleCreateGeneratedAsset(request);
                     break;
@@ -660,7 +732,16 @@ private static string DeriveTransportRequestId(string requestPath)
                     response = HandleSetMaterialProperty(request);
                     break;
                 case "run_integration_tests":
-                    response = HandleRunIntegrationTests();
+                    response = HandleRunIntegrationTests(
+                        request,
+                        requestPath,
+                        responsePath);
+                    break;
+                case "acceptance_status":
+                    response = HandleAcceptanceStatus(request, requestPath);
+                    break;
+                case "cleanup_integration_tests":
+                    response = HandleCleanupIntegrationTests(request, requestPath);
                     break;
                 // Phase 2: BlendShape + Menu
                 case "get_blend_shapes":

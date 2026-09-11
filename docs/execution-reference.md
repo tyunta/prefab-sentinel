@@ -42,6 +42,155 @@ transport にかかわらず `ProjectSession` は process-wide application state
 
 ## レポート / ignore-guid
 
+## Local Unity Bridge acceptance execution (Issue #186)
+
+Use the explicit command only against an already-running, configured Unity 2022.3 Editor and a saved/clean Scene setup. It requires VRChat SDK Base/Worlds and UdonSharp readiness, a clean checkout managed surface, an existing Editor log, and a report destination contained by the project but outside `Assets/`.
+
+```bash
+uv run --extra mcp python scripts/run_unity_bridge_acceptance.py \
+  --project-root /path/to/UnityProject \
+  --scope Assets/AcceptanceScope \
+  --target-dir /path/to/UnityProject/Assets/Editor/PrefabSentinel \
+  --watch-dir 'D:\\UnityProject\\prefab-sentinel' \
+  --unity-log-file /path/to/Editor.log \
+  --out-report /path/to/UnityProject/IssueAcceptanceReports/issue-186.json \
+  --confirm-live
+```
+
+`--confirm-live` is required. Without it the CLI emits one JSON result with `ACCEPTANCE_OPT_IN_REQUIRED`, exits nonzero, and does not activate a project, deploy, publish Bridge requests, or create a fixture. The controller never restarts or repeats a failed phase. Its sole readiness wait is the post-reload environment probe described below.
+
+The fixed execution order is: report reservation and source identity → Editor preflight → #193 safe deploy → Bridge-independent DLL/log compile observation → reconnect/recompile → post-reload environment/Console probes → bounded smoke → same-run lease cleanup → exact final postconditions → atomic terminal report. Source identity and the pre-deploy target comparison use #193's canonical Bridge bundle manifest builder; no-op additionally requires the running Bridge version to match the source version. The deploy comparison does not maintain a second digest algorithm or consume an invented `changed_deploy` response field. For a changed target, the independent observer drains bounded append-only log chunks before sleeping and requires both a new stable DLL identity and Unity's post-baseline script-compilation completion marker. After recompile returns, the environment probe waits at most 120 seconds for `data.bridge.connection_state="unavailable"` to become a fresh status and polls once per second; every other response, blocker, version mismatch, or package-readiness failure is evaluated immediately and is never retried. Terminal postconditions reuse that exact bounded wait after cleanup, whose asset deletion can create the same transient heartbeat gap. The explicit `--watch-dir` is bound to both the MCP child and the parent-side private smoke/cleanup calls as an instance value; the command does not mutate ambient `UNITYTOOL_BRIDGE_WATCH_DIR`, so parallel acceptance transports remain isolated. #193 owns deployment and #194 owns transient reload-heartbeat handling; neither is duplicated here, and accepted live evidence waits for both dependencies.
+
+### `unity_bridge_acceptance.v1` report
+
+The atomically published JSON and the one JSON stdout value are response-equal JSON objects. Formatting is intentionally independent (the report remains pretty JSON while stdout is compact); consumers must parse both and compare objects, not bytes. Its top-level keys are `schema_version`, `audit`, `source`, `environment`, `preflight`, `deploy`, `compile`, `smoke`, `cleanup`, and `result`; `schema_version` is `unity_bridge_acceptance.v1`. Every phase section is a structured `{executed, success, code, data, diagnostics}` snapshot. An unattempted section has `executed=false`, `success=null`, `code=null`, empty `data`, and empty `diagnostics`; this makes early failures explicit rather than fabricating success. `result` carries `success`, `severity`, stable `code`, `message`, `failed_phase`, `phases`, and diagnostics. The report records command arguments only after redaction, Git/package/Bridge/manifest identity, Unity/package readiness, independent compile evidence, bounded case results, and cleanup/postcondition evidence.
+
+The following JSON is the canonical parseable contract for this report version. The controller constructs each section and each `result.phases` entry from a phase-specific allowlist; raw tool messages, data, diagnostics, exceptions, and absolute paths are never copied into either representation.
+
+```json
+{
+  "schema_version": "unity_bridge_acceptance.v1",
+  "top_level_keys": [
+    "schema_version",
+    "audit",
+    "source",
+    "environment",
+    "preflight",
+    "deploy",
+    "compile",
+    "smoke",
+    "cleanup",
+    "result"
+  ],
+  "result_keys": [
+    "success",
+    "severity",
+    "code",
+    "message",
+    "failed_phase",
+    "phases",
+    "diagnostics"
+  ],
+  "unattempted_section": {
+    "executed": false,
+    "success": null,
+    "code": null,
+    "data": {},
+    "diagnostics": []
+  },
+  "audit_required_keys": ["opt_in", "mode", "arguments", "deadlines"],
+  "deadline_values": {
+    "recompile_timeout_sec": 120,
+    "environment_timeout_sec": 120,
+    "smoke_timeout_sec": 300
+  },
+  "section_data_keys": {
+    "source": [
+      "head",
+      "branch",
+      "managed_source_clean",
+      "managed_dirty_paths",
+      "package_versions",
+      "bridge_manifest_sha256",
+      "bridge_files",
+      "mcp_protocol_revision",
+      "mcp_server"
+    ],
+    "environment": [
+      "unity_version",
+      "required_packages",
+      "connection_identity",
+      "project_session"
+    ],
+    "preflight": [
+      "config_validation",
+      "report_reservation",
+      "editor_state",
+      "blockers"
+    ],
+    "deploy": [
+      "changed_deploy",
+      "expected_manifest_sha256",
+      "observed_manifest_sha256",
+      "manifest_equal",
+      "expected_bridge_version",
+      "observed_bridge_version",
+      "bridge_version_equal"
+    ],
+    "compile": [
+      "baseline",
+      "observation",
+      "secondary_recompile",
+      "console"
+    ],
+    "smoke": ["reflection", "runtime_probe", "suite"],
+    "cleanup": ["status", "cleanup", "postconditions"]
+  },
+  "recovery_only_sections": [
+    "audit",
+    "environment",
+    "preflight",
+    "cleanup",
+    "result"
+  ],
+  "terminal_precedence": [
+    "cleanup_failure",
+    "postcondition_failure",
+    "smoke_failure",
+    "success"
+  ],
+  "redaction": {
+    "allowed_path_forms": ["project-relative", "redacted-marker"],
+    "forbidden": [
+      "absolute_paths",
+      "raw_messages",
+      "raw_diagnostics",
+      "raw_exceptions"
+    ]
+  }
+}
+```
+
+Public reports and diagnostics must not contain watch-directory identity marker contents, request/response absolute paths, raw exceptions, stack traces, credentials, environment dumps, or unredacted local user paths beyond the project identity required for the result. Before path validation, audit arguments use redacted placeholders; only normalized, project-contained scope/target/report forms enter a terminal report after validation. Preserve failure reports outside `Assets/`; never commit reports, Editor logs, watch artifacts, or generated fixtures.
+
+### Unresolved lease recovery
+
+`EDITOR_CTRL_ACCEPTANCE_LEASE_UNRESOLVED` blocks a new run before fixture mutation. Recovery is recovery-only and has one public CLI spelling:
+
+```bash
+uv run --extra mcp python scripts/run_unity_bridge_acceptance.py \
+  --project-root /path/to/UnityProject \
+  --scope Assets/AcceptanceScope \
+  --target-dir /path/to/UnityProject/Assets/Editor/PrefabSentinel \
+  --watch-dir 'D:\\UnityProject\\prefab-sentinel' \
+  --unity-log-file /path/to/Editor.log \
+  --out-report /path/to/UnityProject/IssueAcceptanceReports/issue-186-recovery.json \
+  --confirm-live \
+  --recover-run-id aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+The mode reserves/publishes a terminal report, activates the project, requests private same-run status then cleanup, verifies the final project state, and stops. It never begins source identity, deploy, compile, smoke, another acceptance run, or an automatic retry. `ACCEPTANCE_OK` means recovery/postcheck succeeded; `ACCEPTANCE_CLEANUP_FAILED` or `ACCEPTANCE_POSTCONDITION_FAILED` are terminal failures. Cross-run cleanup is rejected; repeated same-run cleanup after a deleted lease is a successful no-op.
+
 - レポート変換（検査結果 JSON → Markdown / JSON / CSV）は v0.4.0 で廃止された旧 `report export` CLI コマンドの機能だった。MCP ツールとしても公開していない（**Non-Goal**）。変換ロジックは内部関数 `prefab_sentinel.reporting.export_report` に残るが、CLI / MCP いずれの公開インターフェースも持たない。代表的なレポート出力フォーマットはドキュメント末尾の「代表レポート出力フォーマット」節を参照。
 - ignore-guid ファイルは UTF-8 テキスト（1 行 1 GUID、`#` 以降コメント可）。`validate_refs` MCP ツールは `<scope>/config/ignore_guids.txt` を auto-load し（存在しなければ無視）、caller 指定の `ignore_asset_guids` 引数と union-dedupe で併用する。詳細は [CONFIGURATION.md](../CONFIGURATION.md) を参照。
 - `validate_refs` MCP ツールの `top_missing_asset_guids` を使って無視候補 GUID を特定できる。`top_missing_asset_guids` / `top_ignored_missing_asset_guids` には GUID→アセットパスのベストエフォート解決結果（`asset_name`）が含まれる。
@@ -71,12 +220,12 @@ uv run python scripts/run_performance_benchmarks.py \
   --enforce
 ```
 
-pre-PR #159 baseline と同一 host / fixture で比較する場合:
+比較対象の baseline と同一 host / fixture で比較する場合は、利用可能な公開コミットを `BASELINE_REF` に指定する（個別の開発履歴には依存しない）:
 
 ```bash
 uv run python scripts/run_performance_benchmarks.py \
   --manifest benchmarks/inspection-performance.v1.json \
-  --baseline-ref e49e938d01d046c19383a7803796503d8c174323 \
+  --baseline-ref "$BASELINE_REF" \
   --baseline-out benchmarks/baselines/pre-pr159.json \
   --out-report performance-report.json \
   --enforce
@@ -97,6 +246,55 @@ uv run python scripts/run_performance_benchmarks.py \
 | #149 | direct / direct | direct / direct | non-impact / non-impact | non-impact |
 | #154 | direct / direct | direct / direct | direct / direct | direct |
 
+## Tool discovery benchmark
+
+`scripts/run_tool_discovery_benchmark.py` measures the current executable MCP
+tool metadata against the committed bilingual fixture without changing the MCP
+server or invoking a tool. It is a manual offline benchmark, not an enforcement
+gate.
+
+```bash
+uv run --extra mcp python scripts/run_tool_discovery_benchmark.py \
+  --fixture benchmarks/tool-discovery/queries.v1.json \
+  --tools-doc docs/tools.md \
+  --out-report /tmp/tool-discovery-report.json
+```
+
+All arguments are required:
+
+| Argument | Meaning |
+|---|---|
+| `--fixture` | Versioned Japanese/English query fixture JSON. |
+| `--tools-doc` | Canonical `docs/tools.md` category catalog. |
+| `--out-report` | Destination for the atomically published JSON evidence. |
+
+After successful argument parsing, the script prints one compact JSON status
+object. Invalid CLI arguments are handled by `argparse` before application
+execution: usage errors exit 2 on stderr and do not emit a JSON status object.
+Its post-parse process contract is:
+
+| Exit | Code | Meaning |
+|---:|---|---|
+| 0 | `TOOL_DISCOVERY_BENCHMARK_OK` | Measurement and report publication completed; low retrieval values remain valid output. |
+| 2 | `TOOL_DISCOVERY_BENCHMARK_CONFIGURATION_INVALID` | Fixture, catalog/registry join, environment metadata, or output configuration is invalid. |
+| 2 | `TOOL_DISCOVERY_BENCHMARK_REPORT_WRITE_FAILED` | The validated report could not be published. |
+
+The published `tool-discovery-benchmark-report.v1` object has exactly these
+top-level keys: `schema_version`, `environment`, `registry`, `fixture`,
+`ranker`, `metrics`, `context_cost`, and `queries`. `environment` contains the
+commit and runtime versions without local paths; `registry` contains tool/category
+counts and a fingerprint; `fixture` contains the version, language counts, and
+SHA-256; `metrics` contains overall and language-split recall@1/3/5/8, MRR,
+zero scores, and unsafe false-positive data; `context_cost` contains full and
+top-k schema costs; and `queries` contains rank and top-eight evidence without
+query prose.
+
+Schema size is compact sorted-key JSON (`ensure_ascii=False`, `separators=(",",
+":")`) encoded as UTF-8. `utf8-bytes-div-4-ceiling.v1` estimates tokens as
+`ceil(utf8_bytes / 4)`. This is a byte-only, model-independent estimate rather
+than a provider tokenizer, billing, or context-window result. The checked-in
+measurement and decision are [the 2026-09-02 tool-discovery result](./benchmarks/2026-09-02-tool-discovery.md).
+
 ## Patch / attestation
 - `patch apply` は plan JSON のスキーマ検証と dry-run preview を実装済み。exactly one open Prefab は `instantiate_prefab` / `rename_object` / `find_game_object` / `find_component` / `set` の 5 種だけを受け入れる。material / ScriptableObject open mode は root asset mutation、scene open mode は `open_scene` / hierarchy / component / `save_scene`、create mode は各 resource kind の create / hierarchy / component / save 操作を扱う。`set_property` / `set_properties` が発行する fileID-addressed serialized-value op は dedicated writer route の契約であり、public `patch_apply` の open Prefab grammar には含まれない。
 - prefab create mode の mutation op（`set` / `insert_array_element` / `remove_array_element`）は `component` selector ではなく、create mode 中に確保した component `$handle` を `target` に指定して適用する。
@@ -109,7 +307,7 @@ uv run python scripts/run_performance_benchmarks.py \
 - `patch_apply` MCP ツールは scope 指定時に `scan_broken_references` を事前実行し、`error` / `critical` で fail-fast 停止する。
 - `patch_apply` MCP ツールは `.prefab` ターゲットで `list_overrides` を事前実行し、`error` / `critical` で fail-fast 停止する。
 - `patch_apply` MCP ツールは Unity ターゲット（`.prefab` / `.unity` / `.asset` など）に対して `UNITYTOOL_PATCH_BRIDGE` 経由の外部 bridge を使って適用できる。
-- `UNITYTOOL_PATCH_BRIDGE` は JSON 入力（stdin） / JSON 出力（stdout）の bridge コマンドを指定する（外部 bridge request `protocol_version: 2`）。
+- `UNITYTOOL_PATCH_BRIDGE` は JSON 入力（stdin） / JSON 出力（stdout）の bridge コマンドを指定する（全 Editor Bridge route 共通の file-IPC `protocol_version: 2`）。patch payload の `plan_version: 2` は別のschema versionである。
 
 ### Exactly-one open Prefab composition transaction (#156)
 
@@ -150,7 +348,7 @@ confirmed transaction は非空 `change_reason` と project-contained `out_repor
 | `resources` | ✅ | 操作対象アセットの一覧。最低 1 件 |
 | `resources[].id` | ✅ | ops から参照する識別子（任意の文字列） |
 | `resources[].path` | ✅ | Unity アセットパス（`Assets/...`） |
-| `resources[].kind` | — | `prefab` / `scene` / `material` / `asset` / `json` / `animation` / `controller`（省略時はパス拡張子から推定） |
+| `resources[].kind` | — | `prefab` / `scene` / `material` / `asset` / `json` / `animation` / `controller`。明示した supported kind は suffix より優先され、dry-run と confirm の全 resource 処理で同じ backend を選ぶ。省略時だけパス拡張子から推定 |
 | `resources[].mode` | — | `open`（既存編集）/ `create`（新規作成）。既定 `open` |
 | `ops` | ✅ | 操作配列（順序実行） |
 | `ops[].resource` | ✅ | `resources[].id` への参照 |
@@ -158,6 +356,10 @@ confirmed transaction は非空 `change_reason` と project-contained `out_repor
 | `postconditions` | — | 適用後の検証条件（省略可） |
 
 ### op 種別一覧
+
+**JSON document open mode（`kind="json"`）:**
+
+JSON document はファイル root を操作対象とするため、`component` / `file_id` は不要。`set` は `path` と `value`、`insert_array_element` は `path` / `index` / `value`、`remove_array_element` は `path` / `index` を指定する。明示的な `kind="json"` は suffix と一致しなくても authoritative であり、たとえば JSON object である既存 `.asmdef` は dry-run / confirm とも JSON backend を使う。`kind` を省略した場合は従来どおり suffix inference が authority となり、未知 suffix は `asset` へ推定される。
 
 **SerializedObject direct writer（`set_property` / `set_properties`）:**
 
@@ -487,9 +689,9 @@ issue #41 で `editor_set_component_fields` から改名。
 - `prefab_sentinel/services/serialized_object/` の resource dispatch は `json` / `prefab` / `asset` / `material` / `scene` の adapter ごとに分離し、Unity 側に渡す resource plan は常に kind / mode を明示した bridge request へ正規化する。
 - `prefab_sentinel/services/serialized_object/` は 1 ファイル 300 行以内の責務別モジュール構成に分割されている（`service.py` が facade、`patch_dispatch` / `patch_preview` / `patch_validator` / `patch_executor` / `patch_json_apply` が JSON ターゲット flow、`resource_bridge` / `resource_bridge_invoke` が Unity Editor bridge 構成、`resource_plan` / `resource_adapters` が resource scope 入り口、`asset_open_ops` / `asset_create_ops` / `asset_create_writers` / `scene_dispatch` / `scene_object_ops` / `scene_component_ops` / `scene_values` / `prefab_create_dispatch` / `prefab_create_structure` / `prefab_create_values` が open/create mode バリデータ群）。公開 API は `prefab_sentinel.services.serialized_object.SerializedObjectService` のみで、後方互換のための re-export やシムは置かない。
 - `tools/unity/PrefabSentinel.UnityPatchBridge.cs` は Editor Bridge から呼び出される実装として `.prefab` の open mode `set` / `insert_array_element` / `remove_array_element`、`.mat` / `.asset` の open mode root asset mutation、`.unity` の open/create mode `open_scene` / `create_scene` / hierarchy / `instantiate_prefab` / component op / `save_scene`、および create mode の prefab root / hierarchy / component op、material / ScriptableObject の `create_asset`、`$handle` 参照 mutation、`save` を適用する（prefab mutation 時の `component` は一意一致必須、component 曖昧時は候補パス付きで fail-fast）。
-- `prefab_sentinel/services/runtime_validation/` は `UNITYTOOL_BRIDGE_WATCH_DIR` が指す Editor Bridge 監視ディレクトリへ `compile_udonsharp` / `run_clientsim` リクエストを JSON で書き出し、`{uuid}.response.json` を待ち受ける。watch ディレクトリ未設定時は `RUN_CONFIG_ERROR` 応答で fail-fast し、未配線を明示する。`run_clientsim` の transport poll は Unity に渡す operation timeout より 35 秒長く、30 秒の Play Mode exit/restore cleanup と 5 秒の file dispatch を待つ。
-- `tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs` は runtime validation 用の Editor 内実装で、UdonSharp compile と ClientSim lifecycle を行い、`success/severity/code/message/data/diagnostics` 形式の応答を返す。ClientSim は requested scene が唯一 loaded かつ active の場合だけ、現在の in-memory scene を `playModeStartScene=null` で Play する。operation deadline は snapshot/preflight より前に固定し、期限切れなら lease 取得前に停止する。dirty asset 観測は既に loaded な persistent dirty object だけを列挙し、全 project asset を load しない。full request と独立 restoration lease を `SessionState` に保持し、domain reload 後も exit → previous start-scene restore → after snapshot → response write → state clear の順序を再開する。restore 失敗時は lease を保持して再試行し、復元成功前に response/state clear を行わない。エントリーポイントは file-IPC 用 `RunFromPaths(requestPath, responsePath)` のみ。
-- **Editor Bridge セットアップ**: Unity Editor で `PrefabSentinel > Editor Bridge` メニューから EditorWindow を開き、watch ディレクトリを指定する。Python 側は `UNITYTOOL_BRIDGE_WATCH_DIR` に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする。Editor Bridge は `EditorApplication.update` で 500 ms 間隔ポーリングし、`action` フィールドで patch / runtime を自動判別する。アトミック書き込み（`.tmp` → rename）で読み取り競合を防止する。
+- `prefab_sentinel/services/runtime_validation/` は `UNITYTOOL_BRIDGE_WATCH_DIR` が指す Editor Bridge 監視ディレクトリへ共通 `protocol_version: 2` の唯一の action `validate_runtime` を JSON で書き出し、`{uuid}.response.json` を待ち受ける。watch ディレクトリ未設定時は `RUN_CONFIG_ERROR` 応答で fail-fast し、未配線を明示する。write-class `compile_only` / `clientsim` は report path reservation と全 preflight を最初の副作用より前に完了し、`out_report` は project root 内かつ `Assets/` 外の atomic publication 可能な path だけを受理する。tool は no save、dirty-clear、revert、generated-asset cleanup を行わない。
+- `tools/unity/PrefabSentinel.UnityRuntimeValidationBridge.cs` は runtime validation 用の Editor 内実装で、UdonSharp compile と ClientSim lifecycle を行い、`success/severity/code/message/data/diagnostics` 形式の応答を返す。compound `clientsim` は ClientSim の全 readiness/state/lease preflight を compile 前に完了し、initial Scene authorization を共有する。続いて compile を1回だけ実行し、compile success 時だけ ClientSim を始める。compile failure は ClientSim/Play Mode を始めず、compile / ClientSim とも partial failure evidence を保持する。ClientSim は requested scene が唯一 loaded かつ active の場合だけ、現在の in-memory scene を `playModeStartScene=null` で Play する。operation deadline は snapshot/preflight より前に固定し、期限切れなら lease 取得前に停止する。dirty asset 観測は既に loaded な persistent dirty native asset (`AssetDatabase.IsNativeAsset`) だけを列挙し、imported source object や全 project asset を load しない。full request と独立 restoration lease を `SessionState` に保持し、domain reload 後も exit → previous start-scene restore → after snapshot → response write → state clear の順序を再開する。restore 失敗時は lease を保持して再試行し、復元成功前に response/state clear を行わない。エントリーポイントは file-IPC 用 `RunFromPaths(requestPath, responsePath)` のみ。
+- **Editor Bridge セットアップ**: Unity Editor で `PrefabSentinel > Editor Bridge` メニューから EditorWindow を開き、watch ディレクトリを指定する。Python 側は `UNITYTOOL_BRIDGE_WATCH_DIR` に `{uuid}.request.json` を書き込み、`{uuid}.response.json` または `{uuid}.publication-failed.json` の出現をポーリングする。Editor Bridge は `EditorApplication.update` で 500 ms 間隔ポーリングし、`action` フィールドで patch / runtime を自動判別する。response のアトミック書き込み（`.tmp` → rename）で読み取り競合を防止し、atomic/direct write の二重失敗時は元 request の rename で tagged terminal failure を通知する。
 - `component` セレクタは `TypeName@Hierarchy/Path` 形式を受け付け、同型コンポーネントが複数ある場合に GameObject 階層で明示的に絞り込める。
 - `set` の値デコードは `int/float/bool/string/null` に加えて `Character` / `LayerMask` / `ArraySize`、`enum`、`Color`、`Vector2/3/4`、`Vector2Int/3Int`、`Rect/RectInt`、`Bounds/BoundsInt`、`Quaternion`、`AnimationCurve`、`Gradient`、`ObjectReference` / `ExposedReference`（`value_kind=json` の `{guid,file_id}` または `{guid,fileID}`）、`ManagedReference`（`value_kind=json`、必要時 `{"__type":"Namespace.Type, Assembly"}` ヒント対応）、`Generic`（カスタム構造体の `value_json` 反映）を扱う。
 - `ObjectReference` は Unity 組み込みリソース（`Library/unity default resources`、`Resources/unity_builtin_extra`）を解決できる。組み込みパス検出時は (1) `Library/unity default resources` と `Resources/unity_builtin_extra` の両パスに対して `AssetDatabase.LoadAllAssetsAtPath` で GUID+fileID マッチング、(2) 既知組み込みアセット名テーブルから `AssetDatabase.GetBuiltinExtraResource` / `Resources.GetBuiltinResource` で直接ロード+GUID+fileID 検証（Editor Bridge コンテキストで `LoadAllAssetsAtPath` が空を返す遅延ロード問題への対策）、(3) `Resources.FindObjectsOfTypeAll` 最終フォールバック の三段階で解決する。通常の `LoadMainAssetAtPath` パスはバイパスする。JSON キーは `fileID`（Unity ネイティブ形式、`plan_generators` 出力）と `file_id`（snake_case、example plan 互換）の両方を受け付ける。
@@ -498,12 +700,39 @@ issue #41 で `editor_set_component_fields` から改名。
 - 配列操作パスの診断は `.Array.data` 形式を厳密検証し、`.Array.size` / index 付き誤指定時はヒント付きで停止する。
 - fixed buffer 配列に対する `insert_array_element` / `remove_array_element` は未対応として明示的に fail-fast 停止し、要素更新は `set` で個別要素パスを指定する方針とする。
 - patch plan v2 は任意の `postconditions` 配列を受け付け、`patch apply` 完了前に検証する。現状の対応型は `asset_exists`（`resource` または `path`）と `broken_refs`（`scope`, `expected_count`, `exclude_patterns`, `ignore_asset_guids`）で、不一致時は fail-fast で停止する。
-- `validate_runtime` MCP ツールは `profile` で実行範囲を選ぶ。既定 `compile_only` は `inspect_world_canvas` / UdonSharp compile / console classification / assert のみで Play Mode と ClientSim に入らない。`editor_console_only` は bridge-owned console buffer を読み、compile / ClientSim を実行しない。`clientsim` は `confirm=True` + 非空 `change_reason` が必須で、dirty scene を既定拒否し、requested scene が sole loaded active scene でなければ Play 前に停止する。Bridge 応答の `data.executed` は必須 boolean で、`true` のとき side-effect report は before/runtime/after と、runtime-only change / post-cleanup residual を完全な型付き schema で返す。欠落・型不正・不完全差分は clean とみなさず warning にする。asset candidate は before/after の対称差分で、dirty 化と clean/unload の両方向を報告する。別 scene の additive open、private ClientSim initializer、Edit Mode runner object、暗黙 save/revert は行わない。
+- `validate_runtime` MCP ツールは `profile` で実行範囲を明示選択する。`compile_only` は force UdonSharp compile の後、`console_authority=unity_log|editor_bridge`（既定 `unity_log`）で一つの Console authority だけを選び、available evidence に対して console classification / assert を実行する。選択 authority が unavailable の場合は別 authority を自動探索・retry・fallbackせず、compile section を保持したまま terminal failure とし `RUN_ASSERT_OK` を返さない。`result.console_evidence` は authority / available / collection_code / line_count を公開する。`editor_console_only` は bridge-owned console buffer を読み、compile / ClientSim を実行しない。`clientsim` は shared preflight の後に compile を実行し、compile success 時だけ Play Mode を開始する。Bridge 応答の `data.executed` は必須 boolean で、`true` のとき side-effect report は before/runtime/after と、runtime-only change / post-cleanup residual を完全な型付き schema で返す。欠落・型不正・不完全差分は clean とみなさず warning にする。asset candidate は before/after の対称差分で、dirty 化と clean/unload の両方向を報告する。別 scene の additive open、private ClientSim initializer、Edit Mode runner object、暗黙 save/revert は行わない。
 - `editor_console` は bridge-owned callback buffer を観測 authority とする。`since_sequence` は sequence cursor より優先され、`since_request_id` は run-script request correlation に使う。`since_request_id` には直前の Editor Bridge response top-level `request_id`（file-transport request id）を渡す。古い `since_seconds` は compatibility window として残るが、deterministic read では sequence / request id を使う。
 - `editor_run_script` は stdout、primitive return value、structured outputs、runtime exception summary、WSL path hints を別 channel で返す。WSL mounted-drive path は guidance を返すだけで snippet source は変更しない。
 - live geometry (`editor_get_transform` / `editor_get_bounds` / `editor_measure_distance`) は routine inspection 用の read-only bridge actions で、run-script snippets を代替しない。World Space UI screenshot framing は同じ RectTransform bounds semantics を使う。
-- `collect_unity_console(runtime_root, log_file, ...)` は `log_file` を `runtime_root` 配下に封じ込める（どちらも symlink 解決後の絶対パスに正規化し、`runtime_root` 外を指す入力は `RUN_CONFIG_ERROR` で fail-fast）。ログファイルの読み取りは `UnicodeDecodeError` を吸収せず、復号失敗時は `RUN_LOG_DECODE_WARN`（warning severity の success 応答、`log_lines=[]`）を返し、後段の分類器で empty classification 扱いとする。
+- `collect_unity_console(runtime_root, log_file, ...)` は `log_file` を `runtime_root` 配下に封じ込める（どちらも symlink 解決後の絶対パスに正規化し、`runtime_root` 外を指す入力は `RUN_CONFIG_ERROR` で fail-fast）。collection payload は `console_authority="unity_log"` と `evidence_available` を持つ。存在する空ファイルは available な zero-line evidence、missing file と UTF-8 復号不能な `RUN_LOG_DECODE_WARN` は unavailable evidence であり、`compile_only` orchestrator は後二者を empty classification に変換しない。
 - `PrefabVariantService.resolve_chain_values(variant_path, diagnostics=None)` および下層の `resolve_chain_values` module 関数は、復号失敗（`OSError` / `UnicodeDecodeError`）を沈黙で `{}` に丸めない。呼び出し側が `diagnostics: list[Diagnostic]` を渡した場合、該当ファイルについて `detail="unreadable_file"` の診断を末尾に追記する（診断 sink 未指定時も従来どおり `{}` を返すが、`revert_overrides` は sink を渡して応答の `diagnostics[]` に伝搬する）。
+
+## Safe Bridge deployment transaction
+
+`deploy_bridge` は source を target へ一件ずつ copy せず、project-global lock の内側で complete bundle を一つの transaction として扱う。
+
+```text
+source manifest を作成
+  -> ownership / target / parent conflict を mutation 前に検証
+  -> Library/PrefabSentinel/deploy-transactions/<run-id>/staged-target へ全件 copy
+  -> staged bytes を再 hash し source-manifest-v1.json を atomic publication
+  -> fresh target は complete directory rename、existing target は private promotion 1 回
+  -> final target manifest を Python 側でも独立再検証
+  -> Library/PrefabSentinel/deploy-ownership-v1.json を atomic publication
+  -> recovery 不要の transaction を cleanup
+```
+
+transaction directory は `Assets` 外にあり、`staged-target` と必要時の `backup-target` を持つ。source manifest は sorted relative path、byte size、file SHA-256 から aggregate SHA-256 を作り、staging と final target の双方で同じ identity を再計算する。`.meta` は manifest hash に含めず、ownership record が証明した既存 source の partner だけを staging へ保存する。target parent と transaction は同一 filesystem 必須で、copy fallback はない。
+
+absent または empty の fresh target は staging directory を一度だけ rename し、`promotion_state=installed_fresh`、`barrier_used=false` となる。現在の project root / Bridge instance ID と一致する fresh `get_editor_state` 応答で観測した running Bridge version、ownership record の manifest、source manifest、existing target の再計算 manifest がすべて一致する場合だけ `promotion_state=already_current` とし、staging transaction の cleanup だけを行う。target move、private action、refresh barrier、`AssetDatabase.Refresh` は実行しない。running identity / version 未観測・不一致、byte 不一致、legacy import のいずれかは no-op にせず、nonempty existing target として接続中 Bridge の private `promote_bridge_bundle` を必須とする。private handler は1回の同期処理内で `AssetDatabase.DisallowAutoRefresh()`、old target から `backup-target` への move、`staged-target` の promotion、manifest verification、必要な rollback、`finally` の対応する `AssetDatabase.AllowAutoRefresh()` を完結させる。host は IPC を跨いで barrier を保持しない。
+
+`promotion_state` は `not_attempted` / `already_current` / `installed_fresh` / `promoted` / `rolled_back` / `rollback_failed`。promotion 後の target mismatch は同じ private action で exact old manifest の recovery を一度だけ試みる。rollback failure は canonical `backup-target` が previous manifest と byte-identical な場合だけ `backup_retained=true` とし、directory の存在や private action の自己申告だけでは保持を認めない。partial set を success としない。ownership publication と cleanup は final target verification 後だけ行う。
+
+preflight / staging failure 後の transaction discard と、complete target outcome 後の cleanup は、削除失敗を `DEPLOY_CLEANUP_FAILED` として `transaction_retained` / `recovery_required` の実測値とともに返す。pre-promotion abort は `promotion_state=not_attempted` のまま Assets を変更しない。cleanup failure を `DEPLOY_STAGING_FAILED` に丸めず、raw exception や private path は公開しない。ambiguous transport、promotion、rollback、cleanup に no automatic retry とし、state を推測する fallback や旧 delete-then-copy 経路は持たない。
+
+private action が安全な complete target outcome を書いた後、refresh barrier 保持中に `AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)` を一度だけ呼ぶ。固定 begin/end ログで明示 import の範囲を記録し、その後 `finally` の対応する `AssetDatabase.AllowAutoRefresh()` で barrier を解放する。これにより barrier 解放と synchronous added / removed source inventory import の間を空けない。`already_current` は target bytesを変更しないためこの refresh 経路へ入らない。direct `CompilationPipeline.RequestScriptCompilation()`、Unity 2022.3.22f1 の実参照で利用不能な `AssetDatabase.ScheduleRefresh()`、`delayCall`、refresh と compile request の二重経路は持たない。`deploy_bridge` の責務は complete bytes、transaction outcome、必要な synchronous import の完了までであり、Unity compile / reload の成功は別の live gate が観測する（Issue #213）。
+
+段階的 upgrade が必要である。promotion を実行するのは更新開始時点の active pre-fix handler なので、#244 のように source filename set を追加・削除する bundle 自身の新 handler に一回の更新中で切り替わることはない。まず同じ source filename set の refresh-aware same-layout bootstrap を配備して reload 後に active と検証し、その handler で filename-changing bundle を配備する。この staged-upgrade constraint は direct all-at-once upgrade が解決済みであるとは主張しない。
 
 ## read-only 検査ツール詳細
 
@@ -537,6 +766,8 @@ issue #41 で `editor_set_component_fields` から改名。
 - 順次実行し、途中失敗で残りをスキップする。完了後は元のビルドターゲットに復元する。
 - レスポンスの `data.platform_results` に per-platform の結果（成功/失敗/スキップ）を含む。
 - `data.original_target_restored` で元のビルドターゲットの復元成否を確認できる。
+- SDK の build/upload 例外は、公開応答では固定 code `VRCSDK_BUILD_FAILED` と固定 message `VRC SDK build or upload failed. See the Unity Console for details.` に投影する。失敗した `data.platform_results[].error` も同じ固定 message であり、元の例外型・message・stack trace・filesystem path は含めない。
+- SDK API は build と upload を一つの呼び出しとして実行するため、例外 message の文面から失敗 phase を推測しない。完全な例外は private diagnostic として Unity Console に記録する。
 - 複数プラットフォーム時は `timeout_sec` を `600 * len(platforms)` 程度に設定することを推奨。
 
 ## 代表レポート出力フォーマット

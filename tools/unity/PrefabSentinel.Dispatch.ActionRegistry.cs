@@ -28,6 +28,12 @@ namespace PrefabSentinel
             "refresh_asset_database",
         };
 
+        /// <summary>Actions reserved for fixed internal transports.</summary>
+        public static readonly HashSet<string> Private = new HashSet<string>
+        {
+            "promote_bridge_bundle",
+        };
+
         /// <summary>All action strings handled by the editor-control bridge.</summary>
         public static readonly HashSet<string> Supported = new HashSet<string>
         {
@@ -41,6 +47,7 @@ namespace PrefabSentinel
             "set_material",
             "delete_object",
             "delete_assets",
+            "promote_bridge_bundle",
             "create_generated_asset",
             "move_asset",
             "list_children",
@@ -51,6 +58,8 @@ namespace PrefabSentinel
             "get_material_property",
             "set_material_property",
             "run_integration_tests",
+            "acceptance_status",
+            "cleanup_integration_tests",
             "vrcsdk_upload",
             "get_blend_shapes",
             "set_blend_shape",

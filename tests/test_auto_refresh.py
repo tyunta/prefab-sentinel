@@ -36,8 +36,17 @@ class TestBridgeStatus(unittest.TestCase):
                 clear=False,
             ):
                 status = bridge_status()
-                self.assertTrue(status["connected"])
-                self.assertEqual(tmpdir, status["watch_dir"])
+
+        self.assertEqual(
+            {
+                "connected": True,
+                "connection_state": "connected",
+                "code": None,
+                "blocker_class": None,
+                "suggested_next_action": None,
+            },
+            status,
+        )
 
 
 class TestMaybeAutoRefresh(unittest.TestCase):
@@ -66,7 +75,14 @@ class TestMaybeAutoRefresh(unittest.TestCase):
                 clear=False,
             ):
                 with patch("prefab_sentinel.orchestrator.send_action") as mock_send:
-                    mock_send.return_value = {"success": True}
+                    mock_send.return_value = {
+                        "success": True,
+                        "severity": "info",
+                        "code": "EDITOR_CTRL_REFRESH_OK",
+                        "message": "Asset database refreshed.",
+                        "data": {},
+                        "diagnostics": [],
+                    }
                     result = orch.maybe_auto_refresh()
                     self.assertEqual("true", result)
                     mock_send.assert_called_once_with(action="refresh_asset_database")
@@ -95,7 +111,11 @@ class TestMaybeAutoRefresh(unittest.TestCase):
                 with patch("prefab_sentinel.orchestrator.send_action") as mock_send:
                     mock_send.return_value = {
                         "success": False,
+                        "severity": "error",
                         "code": "EDITOR_CTRL_REFRESH_FAILED",
+                        "message": "Asset database refresh failed.",
+                        "data": {},
+                        "diagnostics": [],
                     }
                     result = orch.maybe_auto_refresh()
 

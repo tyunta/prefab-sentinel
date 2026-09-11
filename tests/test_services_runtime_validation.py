@@ -432,6 +432,63 @@ def _make_project_root(base: Path, name: str = "projA") -> Path:
     return root
 
 
+class CollectUnityConsoleAuthorityTests(unittest.TestCase):
+    def test_missing_log_marks_unity_log_evidence_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = _make_project_root(Path(temp_dir))
+            response = RuntimeValidationService(project_root=root).collect_unity_console()
+
+        self.assertEqual(
+            (
+                True,
+                Severity.WARNING,
+                "RUN_LOG_MISSING",
+                "Unity log file was not found; Console evidence is unavailable.",
+                "unity_log",
+                False,
+                0,
+                [],
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.message,
+                response.data["console_authority"],
+                response.data["evidence_available"],
+                response.data["line_count"],
+                response.data["log_lines"],
+            ),
+        )
+
+    def test_existing_empty_log_marks_unity_log_evidence_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = _make_project_root(Path(temp_dir))
+            (root / "Logs" / "Editor.log").write_text("", encoding="utf-8")
+            response = RuntimeValidationService(project_root=root).collect_unity_console()
+
+        self.assertEqual(
+            (
+                True,
+                Severity.INFO,
+                "RUN_LOG_COLLECTED",
+                "unity_log",
+                True,
+                0,
+                [],
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.data["console_authority"],
+                response.data["evidence_available"],
+                response.data["line_count"],
+                response.data["log_lines"],
+            ),
+        )
+
+
 class CollectUnityConsoleDecodeTests(unittest.TestCase):
     """T-95-A: ``collect_unity_console`` returns a warning-severity
     ``success_response`` with ``RUN_LOG_DECODE_WARN`` and empty log lines
@@ -447,6 +504,11 @@ class CollectUnityConsoleDecodeTests(unittest.TestCase):
             resp = svc.collect_unity_console()
 
             self.assertEqual("RUN_LOG_DECODE_WARN", resp.code)
+            self.assertEqual(
+                "Unity log file could not be decoded as UTF-8; "
+                "Console evidence is unavailable.",
+                resp.message,
+            )
             self.assertEqual(Severity.WARNING, resp.severity)
             self.assertTrue(resp.success)
             self.assertEqual([], resp.data["log_lines"])

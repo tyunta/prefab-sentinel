@@ -6,8 +6,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from prefab_sentinel.wsl_compat import to_wsl_path
-
 WATCH_DIR = "watch_dir"
 BRIDGE_CONNECTION = "bridge_connection"
 COMPILE_OR_BUILD = "compile_or_build"
@@ -20,6 +18,7 @@ _WATCH_DIR_CODES = {
     "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
 }
 _BRIDGE_CONNECTION_CODES = {
+    "EDITOR_BRIDGE_STATUS_UNAVAILABLE",
     "EDITOR_BRIDGE_TIMEOUT",
 }
 _DIRTY_KEYS = (
@@ -78,35 +77,39 @@ def _blocker(
 
 
 def _watch_dir_status_blocker(
-    status: Mapping[str, Any],
     bridge: Mapping[str, Any],
+    configured_watch_dir: Path | None,
 ) -> dict[str, Any] | None:
-    configured_watch_dir = _string_value(status, "configured_watch_dir")
-    reported_watch_dir = _string_value(bridge, "watch_dir")
-    if configured_watch_dir and reported_watch_dir and configured_watch_dir != reported_watch_dir:
+    code = _string_value(bridge, "code")
+    if code == "EDITOR_BRIDGE_WATCH_DIR_MISMATCH":
         return _blocker(
             WATCH_DIR,
             state_source="bridge_transport",
-            message="Configured watch directory differs from the Bridge-reported watch directory.",
-            suggested_next_action="Use the same watch directory for Codex and the Unity Editor Bridge.",
-            evidence={
-                "configured_watch_dir": configured_watch_dir,
-                "bridge_watch_dir": reported_watch_dir,
-            },
+            message=(
+                "Configured watch directory differs from the active Unity "
+                "Editor Bridge watch directory."
+            ),
+            suggested_next_action=(
+                "Use the same watch directory for Codex and the Unity Editor Bridge."
+            ),
         )
-    if configured_watch_dir:
+
+    if code == "EDITOR_BRIDGE_STATUS_TRANSIENT" or code in _BRIDGE_CONNECTION_CODES:
+        return None
+
+    code_blocker = _tool_error_code_blocker(bridge)
+    if code_blocker is not None and code_blocker["blocker_class"] == WATCH_DIR:
+        return code_blocker
+
+    if configured_watch_dir is not None:
         try:
-            configured_watch_dir_exists = Path(to_wsl_path(configured_watch_dir)).is_dir()
-        except OSError as exc:
+            configured_watch_dir_exists = configured_watch_dir.is_dir()
+        except OSError:
             return _blocker(
                 WATCH_DIR,
                 state_source="bridge_transport",
                 message="Configured Editor Bridge watch directory status could not be read.",
                 suggested_next_action="Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
-                evidence={
-                    "configured_watch_dir": configured_watch_dir,
-                    "error": str(exc),
-                },
             )
         if not configured_watch_dir_exists:
             return _blocker(
@@ -114,9 +117,8 @@ def _watch_dir_status_blocker(
                 state_source="bridge_transport",
                 message="Configured Editor Bridge watch directory is not an existing directory.",
                 suggested_next_action="Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
-                evidence={"configured_watch_dir": configured_watch_dir},
             )
-    if not reported_watch_dir and bridge.get("connected") is not True:
+    if bridge.get("connected") is not True:
         return _blocker(
             WATCH_DIR,
             state_source="bridge_transport",
@@ -129,6 +131,12 @@ def _watch_dir_status_blocker(
 def _bridge_connection_status_blocker(
     bridge: Mapping[str, Any],
 ) -> dict[str, Any] | None:
+    code_blocker = _tool_error_code_blocker(bridge)
+    if (
+        code_blocker is not None
+        and code_blocker["blocker_class"] == BRIDGE_CONNECTION
+    ):
+        return code_blocker
     if bridge.get("connected") is False and _string_value(bridge, "watch_dir"):
         return _blocker(
             BRIDGE_CONNECTION,
@@ -203,9 +211,11 @@ def classify_status_blockers(
     status: Mapping[str, Any],
     bridge: Mapping[str, Any],
     editor_state: Mapping[str, Any] | None,
+    *,
+    configured_watch_dir: Path | None,
 ) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
-    watch_dir_blocker = _watch_dir_status_blocker(status, bridge)
+    watch_dir_blocker = _watch_dir_status_blocker(bridge, configured_watch_dir)
     if watch_dir_blocker is not None:
         blockers.append(watch_dir_blocker)
     else:
@@ -235,6 +245,13 @@ def _tool_error_code_blocker(
             state_source="bridge_transport",
             message="Editor Bridge watch directory is missing, invalid, or not writable.",
             suggested_next_action="Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
+        )
+    if code == "EDITOR_BRIDGE_STATUS_UNAVAILABLE":
+        return _blocker(
+            BRIDGE_CONNECTION,
+            state_source="bridge_transport",
+            message="Editor Bridge status artifact is unavailable.",
+            suggested_next_action="Confirm Unity is running and the PrefabSentinel Editor Bridge watcher is active.",
         )
     if code in _BRIDGE_CONNECTION_CODES:
         return _blocker(

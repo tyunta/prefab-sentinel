@@ -92,9 +92,47 @@ def render_markdown_report(
             )
         lines.append("")
 
+    if runtime:
+        lines.append("## Runtime Validation")
+        preflight = runtime.get("preflight")
+        if preflight is not None:
+            lines.extend([
+                f"- Preflight Completed: {preflight.get('completed')}",
+                f"- Preflight Diagnostics: {len(preflight.get('diagnostics', []))}",
+            ])
+        compile_report = runtime.get("compile")
+        if compile_report is not None:
+            lines.append(f"- Compile Executed: {compile_report.get('executed')}")
+            if "code" in compile_report:
+                lines.append(f"- Compile Result: {compile_report['code']}")
+            if compile_report.get("executed") is True:
+                if "program_count" in compile_report:
+                    lines.append(f"- Compiled Programs: {compile_report['program_count']}")
+                generated = compile_report.get("generated_assets", {})
+                lines.append(
+                    "- Generated Assets: "
+                    f"created={len(generated.get('actual_created_paths', []))}, "
+                    f"deleted={len(generated.get('actual_deleted_paths', []))}"
+                )
+        clientsim = runtime.get("clientsim")
+        if clientsim is not None:
+            lines.append(f"- ClientSim Executed: {clientsim.get('executed')}")
+            side_effect_report = clientsim.get("side_effect_report")
+            if isinstance(side_effect_report, dict) and "diff_complete" in side_effect_report:
+                lines.append(f"- ClientSim Diff Complete: {side_effect_report['diff_complete']}")
+        for collect_step in ("collect_unity_console", "collect_editor_console"):
+            if collect_step in runtime:
+                lines.append(f"- Log Collect Step: {runtime[collect_step].get('code')}")
+
     classification = runtime.get("classification", {})
     assertion = runtime.get("assertion", {})
-    if classification or assertion:
+    if assertion:
+        lines.append(
+            "- Assertion: "
+            f"{assertion.get('code', 'n/a')} "
+            f"(allow_warnings={assertion.get('allow_warnings', False)})"
+        )
+    if classification:
         count_by_category = classification.get("count_by_category", {})
         if not isinstance(count_by_category, dict):
             count_by_category = {}
@@ -103,10 +141,6 @@ def render_markdown_report(
             categories_by_severity = {}
         lines.extend(
             [
-                "## Runtime Validation",
-                f"- Compile Step: {runtime.get('compile_udonsharp', {}).get('code', 'n/a')}",
-                f"- ClientSim Step: {runtime.get('run_clientsim', {}).get('code', 'n/a')}",
-                f"- Log Collect Step: {runtime.get('collect_unity_console', {}).get('code', 'n/a')}",
                 f"- Matched Issues: {classification.get('count_total', 0)}",
                 f"- Log Line Count: {classification.get('line_count', 0)}",
                 (
@@ -114,11 +148,6 @@ def render_markdown_report(
                     f"critical={categories_by_severity.get('critical', 0)}, "
                     f"error={categories_by_severity.get('error', 0)}, "
                     f"warning={categories_by_severity.get('warning', 0)}"
-                ),
-                (
-                    "- Assertion: "
-                    f"{assertion.get('code', 'n/a')} "
-                    f"(allow_warnings={assertion.get('allow_warnings', False)})"
                 ),
             ]
         )
@@ -135,6 +164,7 @@ def render_markdown_report(
                 key=lambda item: (-int(item[1]), str(item[0])),
             ):
                 lines.append(f"| {category} | {count} |")
+    if runtime:
         lines.append("")
 
     lines.extend(
@@ -149,10 +179,12 @@ def render_markdown_report(
     )
     if diagnostics:
         for index, diag in enumerate(diagnostics, start=1):
-            lines.append(f"{index}. {diag.get('detail', 'detail-missing')}")
-            lines.append(f"   - Path: {diag.get('path', '')}")
-            lines.append(f"   - Location: {diag.get('location', '')}")
-            lines.append(f"   - Evidence: {diag.get('evidence', '')}")
+            diagnostic_data = diag["data"]
+            lines.append(f"{index}. {diag['code']}")
+            lines.append(f"   - Severity: {diag['severity']}")
+            lines.append(f"   - Path: {diagnostic_data.get('path', '')}")
+            lines.append(f"   - Location: {diagnostic_data.get('location', '')}")
+            lines.append(f"   - Message: {diag['message']}")
     else:
         lines.append("No diagnostics.")
     lines.append("")

@@ -51,7 +51,7 @@ MCP ツールの正本一覧は [docs/tools.md](./docs/tools.md)、エラーコ�
 
 | スキル | いつ呼ぶか | 主に使う MCP ツール |
 |--------|-----------|---------------------|
-| [`/prefab-sentinel:guide`](./skills/guide/SKILL.md) | MCP ツールリファレンスが必要なとき・どのツールを使えばいいか判断するとき・パッチ計画 JSON の構造を確認したいとき | 全 84 ツールのリファレンス（[docs/tools.md](./docs/tools.md) と相互参照） |
+| [`/prefab-sentinel:guide`](./skills/guide/SKILL.md) | MCP ツールリファレンスが必要なとき・どのツールを使えばいいか判断するとき・パッチ計画 JSON の構造を確認したいとき | MCP ツールのリファレンス（正本一覧は [docs/tools.md](./docs/tools.md) を参照） |
 | [`/prefab-sentinel:variant-safe-edit`](./skills/variant-safe-edit/SKILL.md) | Prefab / Scene / Asset を編集するとき・パッチ計画を適用するとき（preflight → dry-run → confirm → validate を 1 経路で踏む） | `inspect_variant` / `validate_refs` / `patch_apply` / `validate_runtime` / `revert_overrides` / `set_property` |
 | [`/prefab-sentinel:prefab-reference-repair`](./skills/prefab-reference-repair/SKILL.md) | `validate_refs` で broken GUID / fileID が検出されたとき・ignore-guid ポリシーで noise を整理したいとき | `validate_refs` / `find_referencing_assets` |
 | [`/prefab-sentinel:udon-log-triage`](./skills/udon-log-triage/SKILL.md) | ランタイム例外 / Udon / ClientSim ログエラーが発生したとき・log-based regression のトリアージ | `validate_runtime` / `find_referencing_assets` / `inspect_wiring` |

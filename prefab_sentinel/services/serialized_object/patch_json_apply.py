@@ -16,8 +16,137 @@ from typing import Any
 
 from prefab_sentinel.contracts import Diagnostic, ToolResponse, error_response, success_response
 from prefab_sentinel.json_io import dump_json, load_json
+from prefab_sentinel.services.serialized_object.handles import ARRAY_DATA_SUFFIX, VALUE_OPS
 from prefab_sentinel.services.serialized_object.patch_executor import apply_op
+from prefab_sentinel.services.serialized_object.patch_preview import (
+    dry_run_ok,
+    plan_invalid,
+)
 from prefab_sentinel.unity_assets import decode_text_file
+
+
+def _validate_json_op_schema(
+    target: str,
+    index: int,
+    op: dict[str, Any],
+    diagnostics: list[Diagnostic],
+) -> bool:
+    """Validate value-op fields without requiring a Unity component selector."""
+    op_name = str(op.get("op", "")).strip()
+    op_label = op_name or "?"
+    property_path = str(op.get("path", "")).strip()
+
+    def reject(field: str, evidence: str) -> bool:
+        diagnostics.append(
+            Diagnostic(
+                path=target,
+                location=f"ops[{index}] ({op_label}).{field}",
+                detail="schema_error",
+                evidence=evidence,
+            )
+        )
+        return False
+
+    if op_name not in VALUE_OPS:
+        return reject("op", f"unsupported op '{op_name}'")
+    if not property_path:
+        return reject("path", "path is required")
+    if op_name == "set":
+        return "value" in op or reject("value", "value is required for set")
+    if not property_path.endswith(ARRAY_DATA_SUFFIX):
+        return reject(
+            "path",
+            f"array operations require a '{ARRAY_DATA_SUFFIX}' path",
+        )
+    if "index" not in op:
+        return reject("index", f"index is required for {op_name}")
+    try:
+        item_index = int(op["index"])
+    except (TypeError, ValueError):
+        return reject("index", "index must be an integer")
+    if item_index < 0:
+        return reject("index", "index must be >= 0")
+    if op_name == "insert_array_element" and "value" not in op:
+        return reject("value", "value is required for insert_array_element")
+    return True
+
+
+def dry_run_json_target(
+    target: str,
+    target_path: Path,
+    ops: list[dict[str, Any]],
+) -> ToolResponse:
+    """Preview JSON-document operations against a detached in-memory copy."""
+    if not target_path.exists():
+        return error_response(
+            "SER_TARGET_MISSING",
+            "Patch target file was not found.",
+            data={
+                "target": target,
+                "op_count": len(ops),
+                "applied": 0,
+                "read_only": True,
+            },
+        )
+
+    try:
+        loaded = load_json(decode_text_file(target_path))
+    except (OSError, UnicodeDecodeError) as exc:
+        return error_response(
+            "SER_IO_ERROR",
+            "Failed to read patch target file.",
+            data={
+                "target": target,
+                "op_count": len(ops),
+                "applied": 0,
+                "read_only": True,
+                "error": str(exc),
+            },
+        )
+    except json.JSONDecodeError as exc:
+        return error_response(
+            "SER_TARGET_FORMAT",
+            "Patch target file must be valid JSON for Phase 1 apply backend.",
+            data={
+                "target": target,
+                "op_count": len(ops),
+                "applied": 0,
+                "read_only": True,
+                "error": str(exc),
+            },
+        )
+
+    working = deepcopy(loaded)
+    diagnostics: list[Diagnostic] = []
+    preview: list[dict[str, Any]] = []
+    for index, op in enumerate(ops):
+        if not isinstance(op, dict):
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}]",
+                    detail="schema_error",
+                    evidence="operation must be an object",
+                )
+            )
+            continue
+        if not _validate_json_op_schema(target, index, op, diagnostics):
+            continue
+        try:
+            preview.append(apply_op(working, op))
+        except (TypeError, ValueError, KeyError, IndexError) as exc:
+            diagnostics.append(
+                Diagnostic(
+                    path=target,
+                    location=f"ops[{index}] ({op.get('op', '?')})",
+                    detail="apply_error",
+                    evidence=str(exc),
+                )
+            )
+
+    if diagnostics:
+        return plan_invalid(target, diagnostics, len(ops))
+    return dry_run_ok(target, ops, preview)
 
 
 def propagate_dry_run_failure(
@@ -164,6 +293,7 @@ def apply_json_target(
 
 
 __all__ = [
+    "dry_run_json_target",
     "propagate_dry_run_failure",
     "apply_json_target",
 ]

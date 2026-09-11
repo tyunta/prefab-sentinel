@@ -2,9 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
-using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 namespace PrefabSentinel
 {
@@ -80,12 +78,14 @@ namespace PrefabSentinel
             if (extension == ".prefab")
                 return InspectPrefabSerializedSurface(request);
             if (extension == ".unity")
-                return InspectSceneSerializedSurface(request);
+                return InspectSceneSerializedSurface(request, assetPath);
             if (extension == ".asset")
                 return InspectScriptableObjectSurface(request);
             return InspectorSurfaceAddressError(
                 "asset_path must identify a Prefab, Scene, or ScriptableObject asset.");
         }
+
+        private static partial EditorControlResponse InspectSceneSerializedSurface(EditorControlRequest request, string assetPath);
 
         private static EditorControlResponse InspectPrefabSerializedSurface(
             EditorControlRequest request)
@@ -103,29 +103,6 @@ namespace PrefabSentinel
             finally
             {
                 if (root != null) PrefabUtility.UnloadPrefabContents(root);
-            }
-        }
-
-        private static EditorControlResponse InspectSceneSerializedSurface(
-            EditorControlRequest request)
-        {
-            Scene scene = default(Scene);
-            try
-            {
-                // Unity 2022.3 has no OpenPreviewScene API. Open additively so
-                // the caller's active Scene remains loaded, then always remove
-                // this last-saved inspection Scene without saving it.
-                scene = EditorSceneManager.OpenScene(
-                    request.asset_path, OpenSceneMode.Additive);
-                UnityEngine.Object target = ResolveInspectorComponent(
-                    scene.GetRootGameObjects(), request.symbol_path);
-                return target == null
-                    ? InspectorSurfaceTargetNotFound()
-                    : BuildInspectorSurfaceResponse(request, target);
-            }
-            finally
-            {
-                if (scene.IsValid()) EditorSceneManager.CloseScene(scene, true);
             }
         }
 

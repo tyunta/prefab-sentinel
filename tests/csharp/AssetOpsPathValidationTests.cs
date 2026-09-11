@@ -50,6 +50,12 @@ public class AssetOpsPathValidationTests
     }
 
     [Theory]
+    [InlineData(null, "Assets/Foo.mat", "ASSET_SOURCE_INVALID_PATH", "source_asset_path_required")]
+    [InlineData("", "Assets/Foo.mat", "ASSET_SOURCE_INVALID_PATH", "source_asset_path_required")]
+    [InlineData("Assets/Foo.mat", null, "ASSET_DESTINATION_INVALID_PATH", "destination_asset_path_required")]
+    [InlineData("Assets/Foo.mat", "", "ASSET_DESTINATION_INVALID_PATH", "destination_asset_path_required")]
+    [InlineData(null, null, "ASSET_SOURCE_INVALID_PATH", "source_asset_path_required")]
+    [InlineData("", "", "ASSET_SOURCE_INVALID_PATH", "source_asset_path_required")]
     [InlineData(
         "Assets/Foo.renderTexture",
         "Assets/Foo.mat.meta",
@@ -71,8 +77,8 @@ public class AssetOpsPathValidationTests
         "ASSET_MOVE_CASE_ONLY_RENAME_UNSUPPORTED",
         "case_only_path")]
     public void Move_Path_Rejects_With_Python_Parity_Code(
-        string sourceAssetPath,
-        string destinationAssetPath,
+        string? sourceAssetPath,
+        string? destinationAssetPath,
         string code,
         string reason)
     {

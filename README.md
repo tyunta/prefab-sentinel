@@ -10,7 +10,7 @@ Unity / VRChat プロジェクトの Prefab / Scene / Asset を安全に検査�
 
 YAML-backed read-only 経路（`validate_refs` / `validate_materials` / `inspect_wiring` / `inspect_variant` / `inspect_hierarchy` / `find_referencing_assets` 等）は Unity を起動せずに完結する。`inspect_serialized_surface` / `inspect_with_profile` / `validate_inspector_profile` は、last-saved `SerializedObject` surface を常駐 Editor Bridge 経由で取得する。書き込み経路（`patch_apply` / `set_property` / `editor_*` 等）は常駐 Editor Bridge との file-IPC で動き、`confirm=True` + 非空 `change_reason` の監査ペアを欠く呼び出しは `CHANGE_REASON_REQUIRED` で拒否される。
 
-公開 MCP 境界は Tools capability のみを提供する。stdio は modern `2026-07-28` と、二つの legacy revision（`2025-11-25` / `2025-06-18`）に対応し、任意の HTTP 経路は modern `2026-07-28` のみをローカル loopback の `/mcp` で提供する。これは full conformance の合格宣言ではなく、protocol error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約)、厳格 CI gate の対象範囲は [TESTING.md](./TESTING.md#mcp-three-revision-stdio--modern-http-protocol--wire-conformance)、process-state の既知逸脱は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。対応する request method と transport は [docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/execution-reference.md](./docs/execution-reference.md) を参照。
+公開 MCP 境界は Tools capability のみを提供する。stdio は modern `2026-07-28` と、二つの legacy revision（`2025-11-25` / `2025-06-18`）から成る二世代に対応し、任意の HTTP 経路は modern `2026-07-28` のみをローカル loopback の `/mcp` で提供する。これは full conformance の合格宣言ではなく、protocol error の優先順位と stdio transport 例外は [docs/api-reference.md](./docs/api-reference.md#エラーコード規約)、厳格 CI gate の対象範囲は [TESTING.md](./TESTING.md)、process-state の既知逸脱は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を正本とする。対応する request method と transport は [docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/execution-reference.md](./docs/execution-reference.md) を参照。
 
 本 README は各専門ドキュメントへの入口（[ドキュメントマップ](#ドキュメントマップ) 参照）。仕様の正本は専門ドキュメント群、運用ルールの正本は [AGENTS.md](./AGENTS.md)。
 
@@ -89,7 +89,7 @@ MCP サーバーは Plugin 内部で `uv` / `uvx` 経由でローカル起動さ
 
 ### Unity Bridge
 
-パッチ実適用・ランタイム検証などの書き込み経路と、last-saved `SerializedObject` surface を扱う Inspector profile 経路は、Unity Editor 内に常駐する Editor Bridge との file-IPC で動く。Bridge のセットアップ手順は `/prefab-sentinel:guide` スキルに、watch ディレクトリを指定する環境変数 `UNITYTOOL_BRIDGE_WATCH_DIR` は [CONFIGURATION.md](./CONFIGURATION.md) に記載。未設定で書き込み系ツールを呼ぶと `BRIDGE_WATCH_DIR_MISSING`、Inspector profile ツールを呼ぶと `INSPECTOR_SURFACE_UNAVAILABLE` で fail-fast 停止する。YAML-backed read-only 検査には Bridge 設定は不要。
+パッチ実適用・ランタイム検証などの書き込み経路と、last-saved `SerializedObject` surface を扱う Inspector profile 経路は、Unity Editor 内に常駐する Editor Bridge との file-IPC で動く。Bridge のセットアップ手順は `/prefab-sentinel:guide` スキルに、project-scoped Watch Directory、生成済み instance ID の copy control、接続環境変数は [CONFIGURATION.md の「Editor Bridge の接続設定」](./CONFIGURATION.md#editor-bridge-の接続設定)に記載。未設定で書き込み系ツールを呼ぶと `BRIDGE_WATCH_DIR_MISSING`、Inspector profile ツールを呼ぶと `INSPECTOR_SURFACE_UNAVAILABLE` で fail-fast 停止する。YAML-backed read-only 検査には Bridge 設定は不要。
 
 Python wheel は `tools/unity/` と `knowledge/` の配布対象だけを package 内へ mapping し、nested `.serena` など workspace-local metadata は同梱しない。
 
@@ -112,13 +112,13 @@ Python wheel は `tools/unity/` と `knowledge/` の配布対象だけを packag
 | `patch_apply` | パッチ計画の検証・適用。exactly one `mode="open"` Prefab は composable handle grammar と response-equal report、introduced-only validation、automatic rollback を持つ transaction。詳細は [docs/execution-reference.md](./docs/execution-reference.md)、payload/error は [docs/api-reference.md](./docs/api-reference.md)、実 Unity acceptance は [TESTING.md](./TESTING.md) |
 | `delete_asset` / `delete_assets` | AssetDatabase-backed asset 削除の dry-run / confirm。削除後 broken-reference delta を返す |
 | `editor_create_generated_asset` / `editor_move_asset` | RenderTexture generated asset 作成と AssetDatabase.MoveAsset-backed asset 移動。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload/error は [docs/api-reference.md](./docs/api-reference.md)、confirm audit/report requirements は [CONFIGURATION.md](./CONFIGURATION.md)、live Unity smoke は [TESTING.md](./TESTING.md) を正本とする |
-| `validate_runtime` | 既定 `compile_only` の UdonSharp compile 検証。ClientSim は `profile="clientsim"` + audit pair で明示 opt-in とし、requested scene が唯一 loaded かつ active の場合だけ Play Mode lifecycle を実行 |
+| `validate_runtime` | `profile` が必須の runtime 検証。`editor_console_only` は read-only、`compile_only` / `clientsim` は audit 済み write-class operation。完全な引数・report・実行順序は専門ドキュメントを参照 |
 | `editor_get_transform` / `editor_get_bounds` / `editor_measure_distance` | Editor Bridge 経由の read-only live geometry 検査 |
 | `editor_serialized_property_read` / `editor_serialized_property_list` / `editor_serialized_property_write` | SerializedObject-backed generic inspector / writer API。公開ツール一覧は [docs/tools.md](./docs/tools.md)、payload とエラーコードは [docs/api-reference.md](./docs/api-reference.md) を正本とする |
 | `inspect_serialized_surface` / `inspect_with_profile` / `validate_inspector_profile` | last-saved raw Inspector surface と project-local declarative profile。3 ツールとも read-only だが、常駐 Editor Bridge が前提。ツールは [docs/tools.md](./docs/tools.md)、envelope/error は [docs/api-reference.md](./docs/api-reference.md)、profile path/writer gates は [CONFIGURATION.md](./CONFIGURATION.md)、live Unity protocol は [TESTING.md](./TESTING.md)、author/repair procedure は [skills/inspector-profile-authoring/SKILL.md](./skills/inspector-profile-authoring/SKILL.md) を正本とする |
 | `editor_*` | Editor Bridge 経由の Scene / Hierarchy / Component / BlendShape / Animation 編集、スクリーンショット、Console、UdonSharp field / array write |
 
-Routine CI / agent validation では `validate_runtime(profile="compile_only")` または `validate_runtime(profile="editor_console_only")` を使う。ClientSim は submission scene 向けの明示 opt-in で、`profile="clientsim"` + audit pair が揃い、requested scene が sole loaded active scene の場合だけ実行する。詳細な cleanup/restore/side-effect 契約は [docs/api-reference.md](./docs/api-reference.md) と [docs/execution-reference.md](./docs/execution-reference.md) を正本とする。
+Routine CI / agent validation では `validate_runtime` に明示 profile を渡す。`editor_console_only` は read-only、`compile_only` / `clientsim` は conditional/write profile である。引数、audit、report、Scene 条件、実行順序は [docs/tools.md](./docs/tools.md)、[docs/tool-conventions.md](./docs/tool-conventions.md)、[docs/api-reference.md](./docs/api-reference.md)、[docs/execution-reference.md](./docs/execution-reference.md)、[TESTING.md](./TESTING.md) を正本とする。
 
 YAML-backed read-only 検査（`validate_refs` / `validate_materials` / `inspect_wiring` / `inspect_variant` / `inspect_hierarchy` / `find_referencing_assets` 等）は Unity 不要。Inspector profile の 3 ツールは read-only だが、常駐 Editor Bridge が前提で、`editor_*` 系と `patch_apply` の confirm 適用も同じ Bridge を使う。
 
@@ -141,6 +141,7 @@ YAML-backed read-only 検査（`validate_refs` / `validate_materials` / `inspect
 | [docs/tool-conventions.md](./docs/tool-conventions.md) | MCP protocol / result 境界と、ツールの住所表現・引数命名・監査ペア要否の規約 |
 | [docs/api-reference.md](./docs/api-reference.md) | MCP protocol error、ツール応答エンベロープ、domain error code の正本 |
 | [docs/execution-reference.md](./docs/execution-reference.md) | MCP transport / 起動方法 / smoke-batch / ベンチマーク / patch スキーマ / レポート出力フォーマット |
+| [docs/benchmarks/2026-09-02-tool-discovery.md](./docs/benchmarks/2026-09-02-tool-discovery.md) | Tool discovery benchmark の実測結果と判断 |
 | [TESTING.md](./TESTING.md) | ユニット / 統合 / 回帰 / mutation テストの実行手順とテスト戦略 |
 | [CONFIGURATION.md](./CONFIGURATION.md) | `UNITYTOOL_*` 環境変数・`ignore_guids.txt`・scope config 規約 |
 | [skills/inspector-profile-authoring/SKILL.md](./skills/inspector-profile-authoring/SKILL.md) | `inspector-profile.v1` の安全な project-local author / repair 手順 |

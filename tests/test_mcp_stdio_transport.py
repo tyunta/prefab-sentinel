@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import math
+import subprocess
+import sys
 import unittest
 from typing import Any, cast
+from unittest.mock import patch
 
 from tests._mcp_wire_support import (
     LEGACY_PROTOCOL_VERSIONS,
+    CLIProcess,
     assert_jsonrpc_error,
     assert_jsonrpc_result,
     legacy_initialize_request,
@@ -248,6 +253,60 @@ class TestMCPStdioTransport(unittest.TestCase):
             self.assertIsNotNone(child.returncode)
             self.assertFalse(child.reader_threads_alive)
 
+    def test_communicate_timeout_retains_stderr_and_parent_timing(self) -> None:
+        stderr_marker = "mcp-controlled-child-stderr-marker"
+        real_popen = subprocess.Popen
+        observed_child: CLIProcess | None = None
+
+        def launch_controlled_child(
+            _command: list[str],
+            **kwargs: Any,
+        ) -> subprocess.Popen[str]:
+            return real_popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import json, sys, time; "
+                        f"print({stderr_marker!r}, file=sys.stderr, flush=True); "
+                        "print(json.dumps({'ready': True}), flush=True); "
+                        "time.sleep(60)"
+                    ),
+                ],
+                **kwargs,
+            )
+
+        with patch("tests._mcp_wire_support.subprocess.Popen", side_effect=launch_controlled_child):
+            with self.assertRaises(AssertionError) as raised:
+                with running_mcp_cli("--transport", "stdio", pipe_stdin=True) as child:
+                    observed_child = child
+                    self.assertEqual({"ready": True}, child.read_json_line())
+                    child.communicate(timeout=0.0)
+
+        self.assertIn(stderr_marker, str(raised.exception))
+        self.assertIsInstance(raised.exception.__cause__, subprocess.TimeoutExpired)
+        self.assertIsNotNone(observed_child)
+        child_after_failure = cast(CLIProcess, observed_child)
+        self.assertIsNotNone(child_after_failure.returncode)
+        self.assertFalse(child_after_failure.reader_threads_alive)
+
+        timing_lines = [
+            line
+            for line in str(raised.exception).splitlines()
+            if line.startswith("parent timing: ")
+        ]
+        self.assertEqual(1, len(timing_lines))
+        timing_line = timing_lines[0]
+        timing = json.loads(timing_line.removeprefix("parent timing: "))
+        timing_values = [
+            timing["launch_started_wall"],
+            timing["launch_returned_wall"],
+            timing["failure_observed_wall"],
+            timing["final_exit_observed_wall"],
+        ]
+        self.assertTrue(all(math.isfinite(value) for value in timing_values))
+        self.assertEqual(timing_values, sorted(timing_values))
+
     def test_port_option_is_documented_bounded_and_stdio_inert(self) -> None:
         with running_mcp_cli("--help") as child:
             help_text, _ = child.communicate()
@@ -276,7 +335,47 @@ class TestMCPStdioTransport(unittest.TestCase):
             self.assertEqual(0, child.returncode)
             self.assertEqual("", stdout)
 
-        for invalid_port in ("0", "65536", "not-an-integer"):
+        with running_mcp_cli(
+            "--transport",
+            "stdio",
+            "--port",
+            "0",
+            pipe_stdin=True,
+            _startup_probe=True,
+        ) as child:
+            stdout, stderr = child.communicate("")
+            self.assertEqual(2, child.returncode)
+            self.assertEqual("", stdout)
+            self.assertIn("mcp_server.py: error:", stderr)
+            self.assertNotIn("_mcp_startup_probe.py: error:", stderr)
+
+            prefix = "MCP_STARTUP_PROBE "
+            checkpoints = [
+                json.loads(line.removeprefix(prefix))
+                for line in stderr.splitlines()
+                if line.startswith(prefix)
+            ]
+            self.assertEqual(
+                [
+                    "before_module_import",
+                    "after_module_import",
+                    "before_main",
+                    "before_uvicorn_import",
+                    "after_uvicorn_import",
+                    "before_mcp_http_import",
+                    "after_mcp_http_import",
+                    "system_exit",
+                ],
+                [checkpoint["name"] for checkpoint in checkpoints],
+            )
+            walls = [checkpoint["wall"] for checkpoint in checkpoints]
+            cpus = [checkpoint["cpu"] for checkpoint in checkpoints]
+            self.assertTrue(all(math.isfinite(value) for value in (*walls, *cpus)))
+            self.assertEqual(walls, sorted(walls))
+            self.assertEqual(cpus, sorted(cpus))
+            self.assertEqual(2, checkpoints[-1]["code"])
+
+        for invalid_port in ("65536", "not-an-integer"):
             with self.subTest(port=invalid_port):
                 with running_mcp_cli(
                     "--transport",

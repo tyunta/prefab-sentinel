@@ -5,8 +5,10 @@ import unittest
 import warnings
 from collections.abc import Callable
 from pathlib import Path
+from threading import Lock, get_ident, local
 from unittest.mock import patch
 
+from prefab_sentinel import unity_assets
 from prefab_sentinel.unity_assets import (
     DEFAULT_EXCLUDED_DIR_NAMES,
     GUID_PATTERN,
@@ -393,10 +395,7 @@ class IterReferencesTests(unittest.TestCase):
         )
 
     def test_multiple_references(self) -> None:
-        text = (
-            "line1: {fileID: 100}\n"
-            "line2: {fileID: 200, guid: abcdef01234567890abcdef012345678, type: 2}\n"
-        )
+        text = "line1: {fileID: 100}\nline2: {fileID: 200, guid: abcdef01234567890abcdef012345678, type: 2}\n"
         refs = iter_references(text)
         self.assertEqual(len(refs), 2)
         self.assertEqual(refs[0].file_id, "100")
@@ -446,9 +445,7 @@ class ReferenceMatchDataclassTests(unittest.TestCase):
         )
 
     def test_create_pins_every_field(self) -> None:
-        ref = ReferenceMatch(
-            file_id="1", guid="abc", ref_type="3", line=2, column=4, raw="{}"
-        )
+        ref = ReferenceMatch(file_id="1", guid="abc", ref_type="3", line=2, column=4, raw="{}")
 
         # Materialise every slot as a single tuple so a mutation that
         # swaps two fields (e.g. line and column) is named in the same
@@ -461,6 +458,175 @@ class ReferenceMatchDataclassTests(unittest.TestCase):
 
 
 class CollectProjectGuidIndexTests(unittest.TestCase):
+    def test_reversed_worker_execution_preserves_sorted_and_package_duplicate_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            assets = root / "Assets"
+            package = root / "Library" / "PackageCache" / "example.package"
+            assets.mkdir()
+            package.mkdir(parents=True)
+            for path, guid in (
+                (assets / "Z.asset.meta", "a" * 32),
+                (assets / "A.asset.meta", "a" * 32),
+                (assets / "Project.asset.meta", "b" * 32),
+                (package / "Package.asset.meta", "b" * 32),
+                (package / "Only.asset.meta", "c" * 32),
+            ):
+                path.write_text(f"guid: {guid}\n", encoding="utf-8")
+            batches = [
+                [assets / name for name in ("A.asset.meta", "Project.asset.meta", "Z.asset.meta")],
+                [package / name for name in ("Only.asset.meta", "Package.asset.meta")],
+            ]
+            executed: list[str] = []
+
+            def finish_in_reverse(
+                items: list[Path],
+                worker: Callable[[Path], tuple[str | None, Path] | None],
+                *,
+                max_workers: int | None = None,
+            ) -> list[tuple[str | None, Path] | None]:
+                self.assertIsNone(max_workers)
+                self.assertEqual(items, batches.pop(0))
+                results: list[tuple[str | None, Path] | None] = [None] * len(items)
+                for position in reversed(range(len(items))):
+                    executed.append(items[position].name)
+                    results[position] = worker(items[position])
+                return results
+
+            with patch.object(unity_assets, "run_ordered", side_effect=finish_in_reverse):
+                index = collect_project_guid_index(root)
+
+            self.assertEqual(batches, [])
+            self.assertEqual(
+                executed,
+                ["Z.asset.meta", "Project.asset.meta", "A.asset.meta", "Package.asset.meta", "Only.asset.meta"],
+            )
+            self.assertEqual(
+                index,
+                {"a" * 32: assets / "Z.asset", "b" * 32: package / "Package.asset", "c" * 32: package / "Only.asset"},
+            )
+
+    def test_path_guard_and_guid_read_share_existing_worker_and_rejected_paths_are_not_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            good = root / "Valid.asset.meta"
+            good.write_text(f"guid: {'a' * 32}\n", encoding="utf-8")
+            outside = Path(outside_tmp)
+            outside_meta = outside / "Outside.asset.meta"
+            outside_meta.write_text(f"guid: {'b' * 32}\n", encoding="utf-8")
+            outside_asset = outside / "Outside.asset"
+            outside_asset.write_text("outside", encoding="utf-8")
+            linked_meta = root / "LinkedMeta.asset.meta"
+            linked_asset_meta = root / "LinkedAsset.asset.meta"
+            linked_asset_meta.write_text(f"guid: {'c' * 32}\n", encoding="utf-8")
+            try:
+                linked_meta.symlink_to(outside_meta)
+                (root / "LinkedAsset.asset").symlink_to(outside_asset)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+
+            main_thread = get_ident()
+            worker_context = local()
+            record_lock = Lock()
+            records: dict[Path, list[tuple[str, int, bool]]] = {}
+            real_guard = unity_assets._indexed_asset_path
+            real_extract = unity_assets._extract_guid_safe
+            real_run = unity_assets.run_ordered
+
+            def record(stage: str, path: Path) -> None:
+                with record_lock:
+                    records.setdefault(path, []).append((stage, get_ident(), getattr(worker_context, "active", False)))
+
+            def guard(path: Path, project_root: Path) -> Path | None:
+                record("guard", path)
+                return real_guard(path, project_root)
+
+            def extract(path: Path) -> str | None:
+                record("read", path)
+                return real_extract(path)
+
+            def run_in_existing_workers(items, worker, *, max_workers=None):
+                self.assertIsNone(max_workers)
+
+                def inside_worker(item):
+                    worker_context.active = True
+                    try:
+                        return worker(item)
+                    finally:
+                        worker_context.active = False
+
+                return real_run(items, inside_worker)
+
+            with (
+                patch.object(unity_assets, "_indexed_asset_path", side_effect=guard),
+                patch.object(unity_assets, "_extract_guid_safe", side_effect=extract),
+                patch.object(unity_assets, "run_ordered", side_effect=run_in_existing_workers) as runner,
+            ):
+                index = collect_project_guid_index(root)
+
+            runner.assert_called_once()
+            self.assertEqual(index, {"a" * 32: root / "Valid.asset"})
+            self.assertEqual([stage for stage, _, _ in records[good]], ["guard", "read"])
+            self.assertEqual(records[good][0][1], records[good][1][1])
+            for path, calls in records.items():
+                with self.subTest(path=path.name):
+                    self.assertTrue(all(in_worker and thread_id != main_thread for _, thread_id, in_worker in calls))
+            self.assertEqual([stage for stage, _, _ in records[linked_meta]], ["guard"])
+            self.assertEqual([stage for stage, _, _ in records[linked_asset_meta]], ["guard"])
+
+    def test_resolves_project_root_once_across_complete_project_and_package_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = (Path(tmpdir) / "project").resolve()
+            assets = root / "Assets"
+            package = root / "Library" / "PackageCache" / "example.package"
+            assets.mkdir(parents=True)
+            package.mkdir(parents=True)
+            paths = [
+                assets / "Shared.asset",
+                assets / "Project.asset",
+                package / "Shared.asset",
+                package / "Package.asset",
+            ]
+            for path, guid in zip(paths, ("a" * 32, "b" * 32, "a" * 32, "c" * 32), strict=True):
+                path.with_suffix(path.suffix + ".meta").write_text(f"guid: {guid}\n", encoding="utf-8")
+            input_root = root / ".." / "project"
+            resolved_paths: list[Path] = []
+            resolution_lock = Lock()
+            original_resolve = Path.resolve
+
+            def counted_resolve(path: Path, strict: bool = False) -> Path:
+                with resolution_lock:
+                    resolved_paths.append(path)
+                return original_resolve(path, strict=strict)
+
+            with patch.object(Path, "resolve", new=counted_resolve):
+                index = collect_project_guid_index(input_root)
+
+            self.assertEqual(
+                index,
+                {
+                    "a" * 32: package / "Shared.asset",
+                    "b" * 32: assets / "Project.asset",
+                    "c" * 32: package / "Package.asset",
+                },
+            )
+            self.assertEqual([path for path in resolved_paths if path in {input_root, root}], [input_root])
+            for path in paths:
+                self.assertEqual(resolved_paths.count(path), 1)
+
+    def test_package_cache_parent_symlink_cannot_escape_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir, tempfile.TemporaryDirectory() as outside_tmp:
+            root = Path(tmpdir)
+            outside = Path(outside_tmp)
+            (root / "Library").mkdir()
+            (outside / "Escaped.asset.meta").write_text(f"guid: {'a' * 32}\n", encoding="utf-8")
+            try:
+                (root / "Library" / "PackageCache").symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                self.skipTest("platform does not support symlink creation")
+
+            self.assertEqual(collect_project_guid_index(root), {})
+
     def test_collects_meta_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -618,11 +784,11 @@ class CollectProjectGuidIndexTests(unittest.TestCase):
                 meta.write_text(f"guid: {guid}\n", encoding="utf-8")
 
             def run_immediately(
-                items: list[tuple[Path, Path]],
-                worker: Callable[[tuple[Path, Path]], tuple[str | None, Path]],
+                items: list[Path],
+                worker: Callable[[Path], tuple[str | None, Path] | None],
                 *,
                 max_workers: int | None = None,
-            ) -> list[tuple[str | None, Path]]:
+            ) -> list[tuple[str | None, Path] | None]:
                 self.assertIsNone(max_workers)
                 return [worker(item) for item in items]
 
@@ -689,9 +855,7 @@ class ResolveScopePathTests(unittest.TestCase):
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
                 resolve_scope_path("Assets/Sample/Test.prefab", fake_root)
-                doubled_warnings = [
-                    x for x in w if "Path doubling detected" in str(x.message)
-                ]
+                doubled_warnings = [x for x in w if "Path doubling detected" in str(x.message)]
                 self.assertEqual(len(doubled_warnings), 1)
 
 

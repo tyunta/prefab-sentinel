@@ -994,6 +994,50 @@ class UnityPatchBridgeTests(unittest.TestCase):
             msg="malformed aggregate resource selectors must fail closed",
         )
 
+    def test_aggregate_plan_fallback_is_independent_of_transport_version(self) -> None:
+        from tools import unity_patch_bridge
+
+        resource_batches: list[
+            tuple[dict[str, Any], list[dict[str, Any]]]
+        ] = [
+            (
+                {
+                    "id": "one",
+                    "kind": "prefab",
+                    "path": "Assets/One.prefab",
+                    "mode": "open",
+                },
+                [],
+            ),
+            (
+                {
+                    "id": "two",
+                    "kind": "scene",
+                    "path": "Assets/Two.unity",
+                    "mode": "open",
+                },
+                [],
+            ),
+        ]
+
+        with patch.object(unity_patch_bridge, "PROTOCOL_VERSION", 7):
+            response = unity_patch_bridge._finalize_bridge_plan_response(
+                plan={"ops": []},
+                responses=[],
+                resource_batches=resource_batches,
+                executable_batches=[],
+            )
+
+        data = require_mapping(response["data"], "aggregate data")
+        self.assertEqual(
+            (7, 2, 7),
+            (
+                response["protocol_version"],
+                data["plan_version"],
+                data["protocol_version"],
+            ),
+        )
+
     def test_core_parser_rejects_successful_error_severity_resource_summaries(
         self,
     ) -> None:

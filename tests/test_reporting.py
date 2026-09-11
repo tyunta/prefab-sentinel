@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import unittest
 
+from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse
 from prefab_sentinel.reporting import extract_runtime_validation_data, render_csv_report
 from prefab_sentinel.reporting_markdown import render_markdown_report
 
@@ -108,20 +110,13 @@ class ReportingTests(unittest.TestCase):
             "success": False,
             "severity": "critical",
             "code": "VALIDATE_RUNTIME_RESULT",
-            "message": "validate.runtime pipeline completed (log-based scaffold).",
+            "message": "validate.runtime pipeline completed.",
             "data": {
+                "profile": "editor_console_only",
                 "steps": [
                     {
-                        "step": "compile_udonsharp",
-                        "result": {"code": "RUN_COMPILE_SKIPPED", "data": {}},
-                    },
-                    {
-                        "step": "run_clientsim",
-                        "result": {"code": "RUN_CLIENTSIM_SKIPPED", "data": {}},
-                    },
-                    {
-                        "step": "collect_unity_console",
-                        "result": {"code": "RUN_LOG_COLLECTED", "data": {}},
+                        "step": "collect_editor_console",
+                        "result": {"code": "RUN_EDITOR_CONSOLE_COLLECTED", "data": {}},
                     },
                     {
                         "step": "classify_errors",
@@ -159,9 +154,7 @@ class ReportingTests(unittest.TestCase):
         rendered = render_markdown_report(payload)
 
         self.assertIn("## Runtime Validation", rendered)
-        self.assertIn("Compile Step: RUN_COMPILE_SKIPPED", rendered)
-        self.assertIn("ClientSim Step: RUN_CLIENTSIM_SKIPPED", rendered)
-        self.assertIn("Log Collect Step: RUN_LOG_COLLECTED", rendered)
+        self.assertIn("Log Collect Step: RUN_EDITOR_CONSOLE_COLLECTED", rendered)
         self.assertIn("Matched Issues: 3", rendered)
         self.assertIn("| UDON_NULLREF | 2 |", rendered)
         self.assertIn("| BROKEN_PPTR | 1 |", rendered)
@@ -221,6 +214,86 @@ class ReportingTests(unittest.TestCase):
             "(Assets/Old/Removed.mat) (10)",
             rendered,
         )
+
+
+class MarkdownDiagnosticTests(unittest.TestCase):
+    def test_current_wire_diagnostic_fields_are_rendered_without_changing_payload(self) -> None:
+        payload = ToolResponse(
+            False, Severity.ERROR, "REF001", "Validation failed.",
+            {"checked": 7, "nested": {"label": "検証"}},
+            [Diagnostic("Assets/Example.prefab", "42:7", "broken_ref", "Missing target.")],
+        ).to_dict()
+        original = json.dumps(payload, sort_keys=True)
+
+        rendered = render_markdown_report(payload)
+
+        self.assertEqual(
+            "1. broken_ref\n"
+            "   - Severity: error\n"
+            "   - Path: Assets/Example.prefab\n"
+            "   - Location: 42:7\n"
+            "   - Message: Missing target.\n",
+            rendered.split("## Diagnostics\n", 1)[1],
+        )
+        raw_json = rendered.split("```json\n", 1)[1].split("\n```", 1)[0]
+        self.assertEqual(payload["data"], json.loads(raw_json))
+        self.assertEqual(original, json.dumps(payload, sort_keys=True))
+
+    def test_current_wire_diagnostics_keep_order_severity_and_locations_with_limits(self) -> None:
+        payload = ToolResponse(
+            False, Severity.ERROR, "REF001", "Validation failed.",
+            {
+                "usages": [{"path": "first"}, {"path": "second"}],
+                "steps": [{"step": "a"}, {"step": "b"}],
+            },
+            [
+                Diagnostic("", "", "review_note", "", "warning"),
+                Diagnostic("Assets/Second.prefab", "8:2", "broken_ref", "Second target missing."),
+                Diagnostic("Assets/Third.prefab", "", "known_issue", "Third target checked.", "info"),
+            ],
+        ).to_dict()
+        original = json.dumps(payload, sort_keys=True)
+
+        rendered = render_markdown_report(payload, md_max_usages=1, md_max_steps=1)
+
+        self.assertEqual(
+            "1. review_note\n"
+            "   - Severity: warning\n"
+            "   - Path: \n"
+            "   - Location: \n"
+            "   - Message: review_note\n"
+            "2. broken_ref\n"
+            "   - Severity: error\n"
+            "   - Path: Assets/Second.prefab\n"
+            "   - Location: 8:2\n"
+            "   - Message: Second target missing.\n"
+            "3. known_issue\n"
+            "   - Severity: info\n"
+            "   - Path: Assets/Third.prefab\n"
+            "   - Location: \n"
+            "   - Message: Third target checked.\n",
+            rendered.split("## Diagnostics\n", 1)[1],
+        )
+        raw_json = rendered.split("```json\n", 1)[1].split("\n```", 1)[0]
+        self.assertEqual(
+            {
+                "usages": [{"path": "first"}],
+                "usages_total": 2,
+                "usages_truncated_for_markdown": 1,
+                "steps": [{"step": "a"}],
+                "steps_total": 2,
+                "steps_truncated_for_markdown": 1,
+            },
+            json.loads(raw_json),
+        )
+        self.assertEqual(original, json.dumps(payload, sort_keys=True))
+
+    def test_empty_current_wire_diagnostic_list_remains_explicit(self) -> None:
+        payload = ToolResponse(True, Severity.INFO, "VALIDATE_REFS_RESULT", "Checked.", {}).to_dict()
+
+        rendered = render_markdown_report(payload)
+
+        self.assertEqual("No diagnostics.\n", rendered.split("## Diagnostics\n", 1)[1])
 
 
 class CsvReportTests(unittest.TestCase):

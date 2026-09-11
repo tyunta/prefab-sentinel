@@ -476,6 +476,68 @@ class TestStatus(unittest.TestCase):
             observed,
         )
 
+    def test_status_uses_supplied_bridge_projection(self) -> None:
+        session = ProjectSession()
+        projection = {
+            "connected": False,
+            "connection_state": "misconfigured",
+            "code": "EDITOR_BRIDGE_WATCH_DIR_MISMATCH",
+            "blocker_class": "watch_dir",
+            "suggested_next_action": (
+                "Use the same watch directory for Codex and the Unity Editor Bridge."
+            ),
+        }
+
+        status = session.status(bridge_projection=projection)
+
+        self.assertEqual(projection, status["bridge"])
+
+    def test_public_status_redacts_watch_transport_details_and_preserves_project_root(self) -> None:
+        secret = "ISSUE162_SECRET_SESSION_STATUS"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            watch_dir = project_root / "ISSUE162_SECRET_WATCH_DIR"
+            watch_dir.mkdir()
+            original_is_dir = Path.is_dir
+
+            def fail_watch_dir_probe(path: Path) -> bool:
+                if path == watch_dir:
+                    raise OSError(secret)
+                return original_is_dir(path)
+
+            session = ProjectSession(project_root=project_root)
+            try:
+                Path.is_dir = fail_watch_dir_probe  # type: ignore[assignment]
+                with (
+                    patch.dict(os.environ, {"UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir)}),
+                    self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+                ):
+                    status = session.status()
+            finally:
+                Path.is_dir = original_is_dir  # type: ignore[assignment]
+
+        public_wire = repr(status)
+        private_log = "\n".join(captured.output)
+        self.assertEqual(str(project_root), status["project_root"])
+        self.assertEqual(str(project_root), status["expected_project_root"])
+        self.assertNotIn("configured_watch_dir", status)
+        self.assertEqual(
+            {
+                "connected": False,
+                "connection_state": "unavailable",
+                "code": "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                "blocker_class": "watch_dir",
+                "suggested_next_action": (
+                    "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                ),
+            },
+            status["bridge"],
+        )
+        self.assertNotIn(secret, public_wire)
+        self.assertNotIn(str(watch_dir), public_wire)
+        self.assertIn(secret, private_log)
+        self.assertIn(str(watch_dir), private_log)
+
     @patch("prefab_sentinel.session_cache.Phase1Orchestrator")
     @patch("prefab_sentinel.session_cache.build_script_name_map")
     def test_after_warm(self, mock_build: MagicMock, mock_orch: MagicMock) -> None:
@@ -807,6 +869,76 @@ class TestShutdown(unittest.TestCase):
 
         asyncio.run(_run())
         self.assertIsNone(session._watcher_task)
+
+    def test_shutdown_collects_failed_watcher_without_rethrowing(self) -> None:
+        async def _run(session: ProjectSession, failure: Exception) -> None:
+            async def _fail() -> None:
+                raise failure
+
+            finished = asyncio.Event()
+            task = asyncio.create_task(_fail())
+            task.add_done_callback(session._on_watcher_done)
+            task.add_done_callback(lambda _: finished.set())
+            session._watcher_task = task
+            await finished.wait()
+            self.assertIs(task.exception(), failure)
+            await session.shutdown()
+            self.assertIsNone(session._watcher_task)
+            self.assertTrue(session._stop_event.is_set())
+            self.assertTrue(task.done())
+
+        failures = (
+            OSError(12, "watcher allocation failure"),
+            ExceptionGroup("watcher failures", [OSError(12, "watcher allocation failure")]),
+        )
+        for failure in failures:
+            with self.subTest(failure_type=type(failure).__name__):
+                session = ProjectSession()
+                with self.assertLogs("prefab_sentinel.session", level="ERROR") as logs:
+                    asyncio.run(asyncio.wait_for(_run(session, failure), timeout=2))
+                self.assertEqual(len(logs.records), 1)
+                exc_info = logs.records[0].exc_info
+                assert exc_info is not None
+                self.assertIs(exc_info[1], failure)
+
+    def test_shutdown_propagates_caller_cancellation_after_watcher_cleanup(self) -> None:
+        session = ProjectSession()
+
+        async def _run() -> None:
+            started = asyncio.Event()
+            cleaning = asyncio.Event()
+            release = asyncio.Event()
+            cleaned = asyncio.Event()
+
+            async def _watch() -> None:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleaning.set()
+                    try:
+                        await release.wait()
+                    finally:
+                        cleaned.set()
+
+            watcher = asyncio.create_task(_watch())
+            session._watcher_task = watcher
+            await started.wait()
+            shutdown = asyncio.create_task(session.shutdown())
+            try:
+                await cleaning.wait()
+                shutdown.cancel("caller stopped shutdown")
+                with self.assertRaises(asyncio.CancelledError) as caught:
+                    await shutdown
+                self.assertEqual(caught.exception.args, ("caller stopped shutdown",))
+                self.assertTrue(cleaned.is_set())
+                self.assertTrue(watcher.done())
+                self.assertIsNone(session._watcher_task)
+            finally:
+                release.set()
+                await asyncio.gather(watcher, shutdown, return_exceptions=True)
+
+        asyncio.run(asyncio.wait_for(_run(), timeout=2))
 
 
 # ---------------------------------------------------------------------------

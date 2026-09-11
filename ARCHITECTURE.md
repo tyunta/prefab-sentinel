@@ -48,6 +48,8 @@ flowchart LR
 
 サーバー生成時に作る `ProjectSession` は MCP protocol session ではなく、activation、cache、watcher を保持する process-wide application state である。1 プロセスを 1 logical client / 1 project scope として運用し、`activate_project` が後続 request で暗黙利用される state を更新する。`tools/call` は process-wide lock で直列化し、`server/discover` / `tools/list` は tool-call lock の対象外とする。複数 client / project の共有 server や request ごとの ProjectSession は提供しない。
 
+補助 file watcher の fault は done callback が診断として記録する。停止処理はその結果を回収して task の参照を解放し、既知の fault を MCP lifespan 終了時に再送出しない。一方、終了処理を呼ぶ側へのキャンセルは伝播させる。これは監視失敗による二重の終了エラーと、外側キャンセルの握り潰しを避けるための責務分離である（#211）。
+
 この request 間の `ProjectSession` / `activate_project` continuity は **意図した product constraint であると同時に、MCP 2026-07-28 の per-request metadata / stateless model に対する既知の逸脱**である。protocol-level session header を使わないことと、application state が stateless であることは同義ではない。選択した HTTP conformance scenarios が通過してもこの逸脱は解消されないため、現行設計について full 2026-07-28 conformance は主張しない。
 
 ### services
@@ -64,7 +66,7 @@ flowchart LR
 
 ### tools/unity
 
-`tools/unity_patch_bridge.py`（Python 側中継）と `tools/unity/PrefabSentinel.*.cs`（Unity Editor 内 C# 実装）の対で構成する常駐 Editor Bridge。`UNITYTOOL_BRIDGE_WATCH_DIR` 配下に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする file-IPC のみが Unity との連携経路（issue #270 で Unity batchmode 経路は削除済み）。C# 側は `EditorApplication.update` で 500 ms 間隔のディスパッチを行い、`UnityEditorControlBridge` と `UnityPatchBridge` をそれぞれ概念単位の partial class に分割している（partial inventory は AGENTS.md「設計原則」を参照）。Project asset の確定削除は `UnityEditorControlBridge.AssetDelete` partial が `AssetDatabase.DeleteAssets` で実行し、Python filesystem delete は使用しない。
+`tools/unity_patch_bridge.py`（Python 側中継）と `tools/unity/PrefabSentinel.*.cs`（Unity Editor 内 C# 実装）の対で構成する常駐 Editor Bridge。`UNITYTOOL_BRIDGE_WATCH_DIR` 配下に `{uuid}.request.json` を書き込み、`{uuid}.response.json` の出現をポーリングする file-IPC のみが Unity との連携経路（issue #270 で Unity batchmode 経路は削除済み）。file-IPC protocolは全 routeでversion 2を共有し、C#は `UnityEditorControlBridge.ProtocolVersion`、Pythonは `bridge_constants.PROTOCOL_VERSION` を正本とする。patchの `plan_version=2` は別のdata schema contractである。watch directory ごとに `.prefab-sentinel-watch-identity` marker を持ち、Bridge は project-root 側の private `Library/PrefabSentinel/bridge-status-v1.json` へ marker identity と instance/session metadata を heartbeat する。これは configured directory と実際に Unity が監視している directory の照合専用で、既存 request/response schema は変えない。Python は fresh identity mismatch のみを path-free public status に射影する。response を atomic/direct のどちらでも公開できない場合は request 自体を `{uuid}.publication-failed.json` へ rename し、同じ失敗 channel へ三度目の write を行わず処理済み状態を transport に通知する。C# 側は `EditorApplication.update` で 500 ms 間隔のディスパッチと 1000 ms 間隔の watch-identity heartbeat を行い、`UnityEditorControlBridge` と `UnityPatchBridge` をそれぞれ概念単位の partial class に分割している（partial inventory は AGENTS.md「設計原則」を参照）。Project asset の確定削除は `UnityEditorControlBridge.AssetDelete` partial が `AssetDatabase.DeleteAssets` で実行し、Python filesystem delete は使用しない。
 
 ### benchmarking
 
@@ -126,6 +128,8 @@ flowchart LR
 **主機能** — `resolve_reference(guid, file_id)` / `resolve_object_to_reference(asset_path, hierarchy_path, component_type)` / `scan_broken_references(scope, *, top_missing_breakdown=False)` / `where_used(asset_or_guid)` / `validate_pointer_set(pointer_list)`。`top_missing_breakdown=True` で `top_missing_asset_guids[].referenced_from` に `{source, count}` の per-source-file 内訳が追加される（issue #198）。`where_used` は 32 文字 GUID が project meta index に無い場合でも、caller が `scope` を指定していれば scoped YAML scan を継続し、target missing metadata と usage list を返す（issue #113）。
 
 **出力カテゴリ** — `resolved` / `missing_asset` / `missing_local_id` / `type_mismatch`。
+
+**明示 refresh** — `validate_refs(refresh_guid_index=True)` は GUID 索引に加えてスコープ内のファイル一覧キャッシュも破棄し、追加・rename・削除後の現行ファイルを再列挙して走査する。GUID 索引だけを更新しても新しい参照元ファイルが走査から漏れるため、両者を同じ refresh 境界で更新する。既定の `False` は従来のキャッシュ利用を保ち、text / localID キャッシュの扱いは変更しない。
 
 **snapshot save / diff モード（issue #199）** — `validate_refs` MCP ツールの `snapshot_save` / `snapshot_diff` 引数は排他で、同時指定は `VALIDATE_REFS_SNAPSHOT_ARG_CONFLICT`。`snapshot_save="<name>"` は現在のスキャン結果を `<temp>/prefab-sentinel-snapshots/<project-hash>/<name>.json` に永続化し、`snapshot_diff="<name>"` は保存済み snapshot との差分（`new_broken` / `resolved` / `unchanged_count`）を `data.steps[0].result.data.snapshot_diff` に積む。snapshot 不在は `VALIDATE_REFS_SNAPSHOT_NOT_FOUND`、`<name>` への path separator / parent-dir token 混入は `VALIDATE_REFS_SNAPSHOT_BAD_NAME`。snapshot ディレクトリは `PREFAB_SENTINEL_SNAPSHOT_DIR` で上書きできる。ビルド前に save、ビルド後に diff を回すと、PR で resolve した broken と新規 introduce された broken を分離して報告できる。
 

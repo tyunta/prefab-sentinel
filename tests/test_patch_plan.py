@@ -5,11 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
 from prefab_sentinel.patch_plan import (
     PLAN_VERSION,
     _infer_resource_kind,
     _normalize_resource,
+    bridge_plan_response_data_is_valid,
     build_bridge_request,
     compute_patch_plan_hmac_sha256,
     compute_patch_plan_sha256,
@@ -109,6 +112,20 @@ class NormalizeResourceTests(unittest.TestCase):
         resource = {"id": "r1", "path": "Assets/a.unity"}
         result = _normalize_resource(resource, 0)
         self.assertEqual(result["kind"], "scene")
+
+    def test_explicit_json_kind_overrides_asmdef_suffix(self) -> None:
+        resource = {
+            "id": "r1",
+            "path": "Assets/Example.asmdef",
+            "kind": "json",
+        }
+        result = _normalize_resource(resource, 0)
+        self.assertEqual("json", result["kind"])
+
+    def test_omitted_kind_infers_asset_for_asmdef_suffix(self) -> None:
+        resource = {"id": "r1", "path": "Assets/Example.asmdef"}
+        result = _normalize_resource(resource, 0)
+        self.assertEqual("asset", result["kind"])
 
     def test_explicit_kind_requires_a_non_empty_string(self) -> None:
         for invalid_kind in (None, 123, "  "):
@@ -472,7 +489,7 @@ class BuildBridgeRequestTests(unittest.TestCase):
         those fields live under ``resources[0]`` only (#88)."""
         plan = normalize_patch_plan(_v2_plan())
         request = build_bridge_request(plan)
-        self.assertEqual(request["protocol_version"], PLAN_VERSION)
+        self.assertEqual(request["protocol_version"], PROTOCOL_VERSION)
         self.assertEqual(request["plan_version"], PLAN_VERSION)
         self.assertNotIn("target", request)
         self.assertNotIn("kind", request)
@@ -503,6 +520,61 @@ class BuildBridgeRequestTests(unittest.TestCase):
         request = build_bridge_request({"resources": [], "ops": []})
         self.assertNotIn("target", request)
         self.assertEqual(request["ops"], [])
+
+    def test_transport_and_plan_versions_use_independent_authorities(self) -> None:
+        plan = normalize_patch_plan(_v2_plan())
+        resources = [
+            {
+                "id": "one",
+                "kind": "prefab",
+                "path": "Assets/One.prefab",
+                "mode": "open",
+                "op_count": 1,
+                "applied": 1,
+                "executed": True,
+                "success": True,
+                "severity": "info",
+                "code": "SER_APPLY_OK",
+            },
+            {
+                "id": "two",
+                "kind": "scene",
+                "path": "Assets/Two.unity",
+                "mode": "open",
+                "op_count": 1,
+                "applied": 1,
+                "executed": True,
+                "success": True,
+                "severity": "info",
+                "code": "SER_APPLY_OK",
+            },
+        ]
+        aggregate_data = {
+            "plan_version": PLAN_VERSION,
+            "resource_count": 2,
+            "op_count": 2,
+            "applied": 2,
+            "resources": resources,
+            "read_only": False,
+            "executed": True,
+            "protocol_version": 7,
+        }
+
+        with patch(
+            "prefab_sentinel.patch_plan.PROTOCOL_VERSION",
+            7,
+            create=True,
+        ):
+            request = build_bridge_request(plan)
+            aggregate_is_valid = bridge_plan_response_data_is_valid(
+                aggregate_data,
+                op_count=2,
+                success=True,
+            )
+
+        self.assertEqual(request["protocol_version"], 7)
+        self.assertEqual(request["plan_version"], PLAN_VERSION)
+        self.assertTrue(aggregate_is_valid)
 
 
 if __name__ == "__main__":
