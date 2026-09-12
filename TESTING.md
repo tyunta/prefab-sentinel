@@ -179,6 +179,8 @@ Issue #167 の live compile acceptance は disposable / operator-authorized scop
 
 The command is an explicit mutation opt-in. Without `--confirm-live` it returns `ACCEPTANCE_OPT_IN_REQUIRED` before project activation, deploy, Bridge request publication, or fixture creation. It never starts, saves, foregrounds, or discards the user's Editor work.
 
+Set `UNITYTOOL_BRIDGE_INSTANCE_ID` from the current Editor's copied connection info before the run. Acceptance forwards that value to its MCP child together with the explicit watch directory; the child needs the matching instance to reuse an already-current bundle without promotion or refresh. The transport regression verifies forwarding after an instance change and exclusion of unrelated parent settings.
+
 ```bash
 uv run --extra mcp python scripts/run_unity_bridge_acceptance.py \
   --project-root /path/to/UnityProject \

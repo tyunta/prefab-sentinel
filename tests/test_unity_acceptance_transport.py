@@ -378,6 +378,47 @@ def test_only_the_configured_watch_directory_enters_the_child_environment() -> N
     ]
     assert parameters.env == {"UNITYTOOL_BRIDGE_WATCH_DIR": "D:/Unity/bridge-watch"}
 
+def test_child_environment_forwards_current_instance_without_unrelated_settings() -> None:
+    from unittest.mock import patch
+
+    captured: list[StdioServerParameters] = []
+
+    def factory(parameters: StdioServerParameters) -> _FakeClient:
+        captured.append(parameters)
+        return _FakeClient()
+
+    async def scenario() -> None:
+        for instance_id in ("a" * 32, "b" * 32):
+            with patch.dict(
+                "os.environ",
+                {
+                    "UNITYTOOL_BRIDGE_INSTANCE_ID": instance_id,
+                    "UNITYTOOL_BRIDGE_WATCH_DIR": "D:/Unrelated/watch",
+                    "UNITYTOOL_UNITY_PROJECT_PATH": "D:/Unrelated/project",
+                    "UNRELATED_SECRET": "must-not-forward",
+                },
+                clear=True,
+            ):
+                async with McpAcceptanceTransport(
+                    worktree_root=Path("/workspace/current-worktree"),
+                    watch_dir="D:/Unity/bridge-watch",
+                    _client_factory=factory,
+                ):
+                    pass
+
+    asyncio.run(scenario())
+
+    assert [parameters.env for parameters in captured] == [
+        {
+            "UNITYTOOL_BRIDGE_WATCH_DIR": "D:/Unity/bridge-watch",
+            "UNITYTOOL_BRIDGE_INSTANCE_ID": "a" * 32,
+        },
+        {
+            "UNITYTOOL_BRIDGE_WATCH_DIR": "D:/Unity/bridge-watch",
+            "UNITYTOOL_BRIDGE_INSTANCE_ID": "b" * 32,
+        },
+    ]
+
 
 def test_wrong_server_name_or_version_blocks_deploy_before_the_mutating_tool_call() -> None:
     """Removing product identity verification would let another modern MCP server receive deploy."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, suppress
 from importlib.metadata import version
@@ -13,6 +14,7 @@ from typing import Any, Protocol, cast
 from mcp import Client, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from prefab_sentinel.bridge_constants import BRIDGE_INSTANCE_ID_ENV
 from prefab_sentinel.bridge_response import is_bridge_response_envelope
 from prefab_sentinel.mcp_server import SERVER_NAME
 
@@ -90,6 +92,10 @@ class McpAcceptanceTransport:
         if _call_timeout_sec <= 0.0:
             raise ValueError("_call_timeout_sec must be positive.")
         self._watch_dir = watch_dir
+        child_environment = {"UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir}
+        instance_id = os.environ.get(BRIDGE_INSTANCE_ID_ENV)
+        if instance_id is not None:
+            child_environment[BRIDGE_INSTANCE_ID_ENV] = instance_id
         self._parameters = StdioServerParameters(
             command="uv",
             args=[
@@ -100,7 +106,7 @@ class McpAcceptanceTransport:
                 "mcp",
                 "prefab-sentinel-mcp",
             ],
-            env={"UNITYTOOL_BRIDGE_WATCH_DIR": watch_dir},
+            env=child_environment,
         )
         self._client_factory = _client_factory
         self._bridge_action = _bridge_action
