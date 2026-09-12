@@ -181,6 +181,8 @@ The command is an explicit mutation opt-in. Without `--confirm-live` it returns 
 
 Set `UNITYTOOL_BRIDGE_INSTANCE_ID` from the current Editor's copied connection info before the run. Acceptance forwards that value to its MCP child together with the explicit watch directory; the child needs the matching instance to reuse an already-current bundle without promotion or refresh. The transport regression verifies forwarding after an instance change and exclusion of unrelated parent settings.
 
+When deployment returns `already_current` and the pre-deploy bundle/running-version comparison also matches, acceptance omits the secondary `editor_recompile` request. `compile.observation.compile_observation` is `not_required`, `compile.secondary_recompile` is empty, and the `recompile` phase is absent; environment, Console, all smoke cases, and cleanup remain required. This avoids requesting an unnecessary script reload after proving that the current bundle can be reused. A real promotion or changed running version retains the recompile probe.
+
 ```bash
 uv run --extra mcp python scripts/run_unity_bridge_acceptance.py \
   --project-root /path/to/UnityProject \

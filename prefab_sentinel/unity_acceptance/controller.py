@@ -327,20 +327,21 @@ async def run_acceptance(
             phases,
         )
 
-    recompiled = await transport.recompile(_RECOMPILE_TIMEOUT_SEC)
-    phases.append(_response_phase("recompile", recompiled))
-    if not _success(recompiled):
-        return _publish_or_report_failure(
-            reservation,
-            _failure(
+    if deployment_changed or _data(deployed).get("promotion_state") != "already_current":
+        recompiled = await transport.recompile(_RECOMPILE_TIMEOUT_SEC)
+        phases.append(_response_phase("recompile", recompiled))
+        if not _success(recompiled):
+            return _publish_or_report_failure(
+                reservation,
+                _failure(
+                    phases,
+                    code="ACCEPTANCE_COMPILE_FAILED",
+                    message="The reloaded Editor Bridge did not recompile cleanly.",
+                    failed_phase="recompile",
+                    diagnostics=_diagnostics(recompiled),
+                ),
                 phases,
-                code="ACCEPTANCE_COMPILE_FAILED",
-                message="The reloaded Editor Bridge did not recompile cleanly.",
-                failed_phase="recompile",
-                diagnostics=_diagnostics(recompiled),
-            ),
-            phases,
-        )
+            )
 
     environment_status = await _await_environment_status(
         transport,

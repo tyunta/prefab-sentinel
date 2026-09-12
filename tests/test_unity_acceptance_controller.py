@@ -689,10 +689,16 @@ def test_deploy_without_canonical_manifest_evidence_fails_closed(
     assert result.to_dict()["deploy"]["data"]["manifest_equal"] is False
 
 
+@pytest.mark.parametrize(
+    ("promotion_state", "expected_recompile"),
+    [("already_current", False), ("promoted", True)],
+)
 def test_deploy_consumes_the_safe_deploy_canonical_manifest_field(
     tmp_path: Path,
     clean_identity: None,
     monkeypatch: pytest.MonkeyPatch,
+    promotion_state: str,
+    expected_recompile: bool,
 ) -> None:
     """Reading #193 manifest/state fields must keep no-op compile evidence honest."""
     monkeypatch.setattr(
@@ -708,7 +714,7 @@ def test_deploy_consumes_the_safe_deploy_canonical_manifest_field(
         deploy=_envelope(
             code="DEPLOY_OK",
             data={
-                "promotion_state": "already_current",
+                "promotion_state": promotion_state,
                 "manifest_sha256": "b" * 64,
                 "bridge_version": "0.9.0",
             },
@@ -734,6 +740,9 @@ def test_deploy_consumes_the_safe_deploy_canonical_manifest_field(
     }
     compile_data = result.to_dict()["compile"]["data"]["observation"]
     assert compile_data["compile_observation"] == "not_required"
+    assert ("recompile" in transport.calls) is expected_recompile
+    secondary = result.to_dict()["compile"]["data"]["secondary_recompile"]
+    assert bool(secondary) is expected_recompile
 
 
 def test_matching_files_with_an_old_running_bridge_still_require_compile_evidence(
