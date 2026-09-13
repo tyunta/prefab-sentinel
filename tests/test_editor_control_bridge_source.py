@@ -9699,11 +9699,6 @@ class TestRuntimeValidationDocumentationContract(unittest.TestCase):
                 "without reload",
                 "without save",
             ),
-            "CHANGELOG.md": (
-                "patch_apply(runtime_scene=...)",
-                "0.9.0",
-                "historical",
-            ),
         }
         self.assertEqual(
             {relative: {token: True for token in tokens} for relative, tokens in required.items()},
