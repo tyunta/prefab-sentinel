@@ -78,19 +78,14 @@ def test_api_section_catalogues_exact_deploy_codes_and_response_fields() -> None
     section = _section(_read("docs/api-reference.md"), _API_HEADING)
 
     documented_codes = {
-        line.split("`", maxsplit=2)[1]
-        for line in section.splitlines()
-        if line.startswith("| `DEPLOY_")
+        line.split("`", maxsplit=2)[1] for line in section.splitlines() if line.startswith("| `DEPLOY_")
     }
 
     assert documented_codes == _STABLE_DEPLOY_CODES
     for field in _CANONICAL_DATA_FIELDS:
         assert f"`{field}`" in section
     assert "`recovery_required`" in section
-    assert (
-        "`AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)`"
-        in section
-    )
+    assert "`AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)`" in section
     assert "added / removed source inventory" in section
 
 
@@ -119,11 +114,7 @@ def test_execution_section_owns_complete_transaction_lifecycle() -> None:
 
 def test_tools_catalog_keeps_one_public_tool_and_routes_to_owners() -> None:
     tools = _read("docs/tools.md")
-    rows = [
-        line
-        for line in tools.splitlines()
-        if line.startswith("| `deploy_bridge` |")
-    ]
+    rows = [line for line in tools.splitlines() if line.startswith("| `deploy_bridge` |")]
 
     assert len(rows) == 1
     assert "api-reference.md#bridge-deployment-response-deploy_bridge" in rows[0]
@@ -166,25 +157,6 @@ def test_testing_section_separates_offline_gate_from_live_acceptance() -> None:
         "Issue #213",
         "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
         "active pre-fix handler",
-        "same-layout bootstrap",
-    )
-    for literal in required_contract:
-        assert literal in section
-
-
-def test_unreleased_changelog_declares_safe_deploy_boundary() -> None:
-    section = _section(_read("CHANGELOG.md"), "## [Unreleased]")
-
-    required_contract = (
-        "#193",
-        "#186",
-        "promote_bridge_bundle",
-        "DEPLOY_BARRIER_UNAVAILABLE",
-        "one-time bootstrap",
-        "manifest_sha256",
-        "bridge_version",
-        "Issue #213",
-        "AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)",
         "same-layout bootstrap",
     )
     for literal in required_contract:

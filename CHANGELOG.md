@@ -4,18 +4,41 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-13
+
+Bridge の更新・再接続と、Unity 上での検査・実行検証を改善したリリースです。`validate_runtime` の呼び出し方が変わるため、既存の自動化を使っている場合は移行が必要です。
+
+### Added
+
+- Editor Bridge ウィンドウに Unity プロジェクト名と Instance ID の表示、接続情報の一括コピー、WSL / Bash・PowerShell 用の Codex 起動コマンドのコピーを追加した。
+- ローカル受入テスト `scripts/run_unity_bridge_acceptance.py` を追加した。明示的な `--confirm-live` で、配置元の確認、Bridge 配置、必要なコンパイル確認、6 ケースの動作テスト、テスト用データの後片付けまで検証し、結果を JSON に保存する。同じ実行の後片付けだけを確認する `--recover-run-id` にも対応する。[実行手順](./TESTING.md#local-unity-bridge-acceptance-issue-186)
+- 日本語・英語の依頼から適切な MCP ツールを見つけられるか、候補の精度と情報量を比較する開発者向けベンチマークを追加した。ツールの公開方法や選択方法そのものは変更していない。[評価結果](./docs/benchmarks/2026-09-02-tool-discovery.md)
+
 ### Changed
 
-- Breaking runtime migration (Issue #167): the historical `patch_apply(runtime_scene=...)` shortcut and implicit runtime profile are no longer supported. Call `validate_runtime` with an explicit profile: `editor_console_only` is read-only; `compile_only` / `clientsim` require `confirm=True`, a non-empty `change_reason`, and an `out_report` inside the project but outside `Assets/`. See [the runtime contract](./docs/execution-reference.md#unity-bridge--runtime).
-- Local Unity Bridge acceptance (Issue #186) provides an explicit `--confirm-live` workflow for source/preflight, safe deployment, compile/reload evidence, smoke checks, and bounded fixture cleanup, with a project-contained terminal report and recovery-only support.
-- Safe Bridge deployment (#193, #186) stages and byte-verifies the complete bundle, then promotes an existing target through private `promote_bridge_bundle` under a balanced Unity refresh barrier. Responses expose verified `manifest_sha256` / `bridge_version`, not compilation success. Older nonempty targets fail closed with `DEPLOY_BARRIER_UNAVAILABLE` and require a separately recorded one-time bootstrap.
-- Existing-target promotion and rollback import the added / removed source inventory with `AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)` while the refresh barrier is held. Releases that change source filenames require a refresh-aware same-layout bootstrap first, because the handler active at deployment start owns promotion (Issue #213).
+- `deploy_bridge` を、ファイル一式の内容と管理対象を確認してから入れ替える方式に変更した。失敗時の復元結果、配置内容のハッシュ、残留データを報告し、不完全な配置を成功として扱わない。配置成功と Unity コンパイル成功は区別して確認する。[配置の仕様](./docs/execution-reference.md#safe-bridge-deployment-transaction)
+- `validate_runtime` の `profile` を必須にした。`editor_console_only` は読み取り専用、`compile_only` / `clientsim` は `confirm=True`・空でない `change_reason`・プロジェクト内かつ `Assets/` 外の `out_report` が必要になる。コンパイルと ClientSim の副作用を分けて記録し、ログを取得できない場合は「エラーなし」とみなさない。[移行先の仕様](./docs/execution-reference.md#unity-bridge--runtime)
+
+### Removed
+
+- `patch_apply(runtime_scene=...)` による暗黙の実行検証と、`validate_runtime` の暗黙の `compile_only` 選択を廃止した。パッチ適用後の実行検証は、必要な `profile` と監査引数を指定した `validate_runtime` に分ける。
 
 ### Fixed
 
-- Editor Bridge の Watch Directory / Enabled 設定を Unity project ごとに分離し、同時起動した別 project の設定を再起動時に継承しないようにした。自動生成される instance ID は `SessionState` で managed reload をまたいで維持し、project/watch/instance の接続情報、WSL / Bash・PowerShell 用 Codex 起動 command を Bridge window からコピーできる。
-- dirty asset 判定を Unity native serialized asset に限定し、保存・再起動でディスク内容が変わらない imported `.shader` オブジェクトを未保存変更として扱わないようにした。Editor status、compile audit、ClientSim 前後の3経路で同じ判定を使う。
-- 現在の project root / Bridge instance ID と一致する fresh 応答で観測した running Bridge version・ownership manifest・source manifest・target bytes が一致する `deploy_bridge` を `already_current` no-op とし、不要な target promotion / `AssetDatabase.Refresh` / domain reload で unrelated assets を dirty にしないようにした。running identity / version が未観測または不一致なら従来どおり private promotion barrier を必須とする。
+- Watch Directory / Enabled を Unity プロジェクト別に保存し、別プロジェクトの設定を再起動時に引き継がないようにした。Instance ID はスクリプトの再読み込みでは維持し、Unity プロセスを再起動したときだけ更新する。監視先の不一致、一時的な再読み込み中、接続不能も区別して報告する。
+- 保存対象ではないインポート済み `.shader` を未保存アセットと判定する問題を修正した。Scene、Prefab、Material などの実際の未保存変更は引き続き検出する。
+- 配置内容と、現在のプロジェクト・Instance ID・稼働バージョンが一致する Bridge は `already_current` として再利用する。古い接続のバージョン情報では判定せず、不要なファイル更新・Refresh を避ける。受入テストも Instance ID を子プロセスへ引き継ぎ、再利用が確認済みの場合は余分な再コンパイルを要求しない。
+- `copy_asset` / `rename_asset` で AnimatorController を扱う際、内部のステート名などを巻き込まずルートの名前だけを変更するようにした。リネームでは既存の `.meta` と GUID を維持する。
+- `validate_refs(refresh_guid_index=True)` でファイル一覧のキャッシュも更新し、追加・リネーム・削除されたファイルを参照検査へ反映するようにした。
+- `inspect_wiring` の `script_filter` 指定時に、対象外コンポーネントの診断が対象の結果へ混入する問題を修正した。対象外の件数と詳細を分け、診断ごとの重要度を保持する。
+- Inspector の Scene 検査で、既に開いている Scene と検査のためだけに開いた Scene を区別するようにした。未保存・対象が曖昧・検査後の復帰失敗は明示的に停止し、不完全な結果を返さない。
+- Bridge 応答の読み取り・形式検証・書き込み失敗の報告を強化した。アセット操作の結果が不明な場合はその状態を明示し、失敗を成功へ変換しない。
+
+### アップグレード時の注意
+
+- 古い Bridge が安全な入れ替えに対応していない場合、`deploy_bridge` は `DEPLOY_BARRIER_UNAVAILABLE` で停止する。初回の移行は通常更新と分けて行う必要があり、ファイル構成が変わる版では既存構成のまま更新処理を先に対応させる段階的な移行が必要になる。[移行制約](./docs/execution-reference.md#safe-bridge-deployment-transaction)
+- 初期設定ではプロジェクト内の `Library/PrefabSentinel/BridgeWatch` を使用する。独自の監視先を使う場合はプロジェクトごとに設定し、Unity 再起動後は Bridge のコピー操作で接続情報を更新する。[接続設定](./CONFIGURATION.md#editor-bridge-の接続設定)
+- 受入テストは未保存変更を自動保存・破棄しない。元 Scene への復帰でアセットが再び未保存になるプロジェクトでは、動作テストが通っても最終状態の比較が不合格になることがある。元の失敗レポートを保持し、保存状態を解消してから同じ実行 ID の復旧確認を行う。
 
 ## [0.9.1] - 2026-08-16
 

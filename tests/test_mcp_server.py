@@ -788,10 +788,6 @@ class TestUnityAcceptanceDocumentation(unittest.TestCase):
                 "### editor_view",
                 "\n### editor_geometry",
             ): ("`editor_run_tests`", "bridge_acceptance", "No new public MCP tool"),
-            ("CHANGELOG.md", "## [Unreleased]", "\n## [0.8.1]"): (
-                "Issue #186",
-                "Local Unity Bridge acceptance",
-            ),
         }
 
         for (relative_path, start_heading, end_heading), expected_contract in (
