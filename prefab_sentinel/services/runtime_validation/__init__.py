@@ -7,8 +7,22 @@ re-exported.  All Unity-bound dispatch flows through the resident
 Editor Bridge file watcher.
 """
 
+from prefab_sentinel.services.runtime_validation.reporting import (
+    RuntimeReportReservation,
+    discard_runtime_report,
+    publish_runtime_report,
+    reserve_runtime_report,
+    runtime_report_skeleton,
+)
 from prefab_sentinel.services.runtime_validation.service import (
     RuntimeValidationService,
 )
 
-__all__ = ["RuntimeValidationService"]
+__all__ = [
+    "RuntimeReportReservation",
+    "RuntimeValidationService",
+    "discard_runtime_report",
+    "publish_runtime_report",
+    "reserve_runtime_report",
+    "runtime_report_skeleton",
+]

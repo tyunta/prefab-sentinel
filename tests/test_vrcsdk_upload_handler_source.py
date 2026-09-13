@@ -348,6 +348,24 @@ class TestLoginPollingInsideTryCatch(unittest.TestCase):
         )
 
 
+class TestFailureBoundaryRedaction(unittest.TestCase):
+    """VRCSDK failures must keep raw exception details out of public responses."""
+
+    def test_handle_async_does_not_publish_exception_message(self) -> None:
+        method_body = _extract_method(_read(UPLOAD_HANDLER), "HandleAsync")
+
+        self.assertNotIn("ex.Message", method_body)
+
+    def test_both_failure_paths_delegate_to_redaction_boundary(self) -> None:
+        method_body = _extract_method(_read(UPLOAD_HANDLER), "HandleAsync")
+
+        self.assertEqual(
+            2,
+            method_body.count("VRCSDKUploadFailureBoundary.ReportFailure("),
+        )
+        self.assertEqual(2, method_body.count("UnityEngine.Debug.LogException"))
+
+
 def _extract_method(source: str, method_name: str) -> str:
     """Extract the body of a named method from C# source (brace-counting)."""
     pattern = re.compile(

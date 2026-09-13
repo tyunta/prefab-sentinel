@@ -152,11 +152,15 @@ namespace PrefabSentinel
                         catch (Exception ex)
                         {
                             platSw.Stop();
-                            results.Add((platform, false, (float)platSw.Elapsed.TotalSeconds, ex.Message, false));
-                            failCode = ex.Message.Contains("upload", StringComparison.OrdinalIgnoreCase)
-                                ? "VRCSDK_UPLOAD_FAILED"
-                                : "VRCSDK_BUILD_FAILED";
-                            failMessage = $"{request.target_type} failed on platform '{platform}' after {platSw.Elapsed.TotalSeconds:F1}s: {ex.Message}";
+                            VRCSDKUploadFailureBoundary.ReportFailure(
+                                ex,
+                                UnityEngine.Debug.LogException,
+                                (code, message) =>
+                                {
+                                    results.Add((platform, false, (float)platSw.Elapsed.TotalSeconds, message, false));
+                                    failCode = code;
+                                    failMessage = message;
+                                });
                             failed = true;
                             break;
                         }
@@ -207,7 +211,11 @@ namespace PrefabSentinel
             catch (Exception ex)
             {
                 totalSw.Stop();
-                WriteResponse(responsePath, BuildError("VRCSDK_BUILD_FAILED", ex.Message));
+                VRCSDKUploadFailureBoundary.ReportFailure(
+                    ex,
+                    UnityEngine.Debug.LogException,
+                    (code, message) =>
+                        WriteResponse(responsePath, BuildError(code, message)));
             }
         }
 

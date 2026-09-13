@@ -2863,9 +2863,208 @@ PrefabInstance:
             )
 
 
+
+
+def _runtime_compile_snapshot() -> dict[str, object]:
+    return {
+        "inventory_stable": True,
+        "prefab_repair_paths": [],
+        "related_assets": [],
+        "loaded_scenes": [],
+        "generated_asset_plan": {
+            "planned_created_paths": [],
+            "planned_deleted_paths": [],
+        },
+        "project_dirty_paths": [],
+    }
+
+
+def _runtime_compile_report(
+    *,
+    executed: bool,
+    success: bool,
+    severity: str,
+    code: str,
+    program_count: int = 0,
+) -> dict[str, object]:
+    diagnostics: list[dict[str, object]] = []
+    if executed and not success and code == "RUN_COMPILE_FAILED":
+        diagnostics.append(
+            {
+                "path": "Assets/Program.asset",
+                "location": "Assets/Program.cs",
+                "detail": "udonsharp_compiler_error",
+                "evidence": "intentional compiler failure",
+            }
+        )
+    return {
+        "executed": executed,
+        "success": success,
+        "severity": severity,
+        "code": code,
+        "program_count": program_count,
+        "before": _runtime_compile_snapshot(),
+        "after": _runtime_compile_snapshot(),
+        "delta": {
+            "newly_dirty_paths": [],
+            "no_longer_dirty_paths": [],
+            "newly_dirty_scene_paths": [],
+            "no_longer_dirty_scene_paths": [],
+            "planned_created_paths": [],
+            "planned_deleted_paths": [],
+            "actual_created_paths": [],
+            "actual_deleted_paths": [],
+            "unrelated_dirty_paths_before": [],
+            "unrelated_dirty_paths_after": [],
+            "attribution_unknown": [],
+        },
+        "generated_assets": {
+            "planned_created_paths": [],
+            "planned_deleted_paths": [],
+            "actual_created_paths": [],
+            "actual_deleted_paths": [],
+        },
+        "diagnostics": diagnostics,
+    }
+
+
+def _runtime_clientsim_snapshot() -> dict[str, object]:
+    return {
+        "Roots": ["World"],
+        "Hierarchy": ["World"],
+        "Components": ["World:UnityEngine.Transform"],
+        "AssetChangeCandidates": [],
+        "Dirty": False,
+        "DirtyCount": 0,
+    }
+
+
+def _runtime_side_effect_report(
+    **updates: object,
+) -> dict[str, object]:
+    report: dict[str, object] = {
+        "diff_complete": True,
+        "diff_warnings": [],
+        "scene_path": "Assets/Scenes/Smoke.unity",
+        "roots_before": ["World"],
+        "roots_runtime": ["World"],
+        "roots_after": ["World"],
+        "hierarchy_before": ["World"],
+        "hierarchy_runtime": ["World"],
+        "hierarchy_after": ["World"],
+        "components_before": ["World:UnityEngine.Transform"],
+        "components_runtime": ["World:UnityEngine.Transform"],
+        "components_after": ["World:UnityEngine.Transform"],
+        "added_gameobjects": [],
+        "removed_gameobjects": [],
+        "added_components": [],
+        "removed_components": [],
+        "residual_added_gameobjects": [],
+        "residual_removed_gameobjects": [],
+        "residual_added_components": [],
+        "residual_removed_components": [],
+        "dirty_before": False,
+        "dirty_runtime": False,
+        "dirty_after": False,
+        "dirty_count_before": 0,
+        "dirty_count_runtime": 0,
+        "dirty_count_after": 0,
+        "asset_change_candidates": [],
+    }
+    report.update(updates)
+    return report
+
+
+def _runtime_bridge_payload(
+    *,
+    profile: str,
+    success: bool,
+    severity: str,
+    code: str,
+    message: str,
+    compile_executed: bool,
+    compile_success: bool,
+    compile_severity: str,
+    compile_code: str,
+    clientsim_executed: bool,
+    side_effect_report: dict[str, object] | None = None,
+) -> dict[str, object]:
+    clientsim = {
+        "executed": clientsim_executed,
+        "initial_scene_snapshot": [],
+        "before": _runtime_clientsim_snapshot() if clientsim_executed else None,
+        "runtime": _runtime_clientsim_snapshot() if clientsim_executed else None,
+        "after": _runtime_clientsim_snapshot() if clientsim_executed else None,
+        "side_effect_report": side_effect_report,
+    }
+    compile_report = _runtime_compile_report(
+        executed=compile_executed,
+        success=compile_success,
+        severity=compile_severity,
+        code=compile_code,
+    )
+    executed = clientsim_executed if profile == "clientsim" else compile_executed
+    return {
+        "protocol_version": 2,
+        "success": success,
+        "severity": severity,
+        "code": code,
+        "message": message,
+        "data": {
+            "project_root": "D:/Project",
+            "scene_path": "Assets/Scenes/Smoke.unity",
+            "profile": profile,
+            "timeout_sec": 10,
+            "udon_program_count": 0,
+            "clientsim_ready": clientsim_executed,
+            "read_only": not (compile_executed or clientsim_executed),
+            "executed": executed,
+            "side_effect_report": side_effect_report,
+            "compile": compile_report,
+            "clientsim": clientsim,
+        },
+        "diagnostics": [],
+    }
+
 class RuntimeValidationServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         _isolate_bridge_dispatch_env(self)
+
+    def _execute_compile_profile(
+        self,
+        service: RuntimeValidationService,
+    ):
+        scene = service.project_root / "Assets" / "RuntimeValidation.unity"
+        if scene.parent.exists() and not scene.exists():
+            scene.write_text("%YAML 1.1\n", encoding="utf-8")
+        return service.execute_write_profile(
+            scene_path="Assets/RuntimeValidation.unity",
+            profile="compile_only",
+            confirm=True,
+            change_reason="runtime validation test",
+            generated_asset_policy="deny",
+            allow_dirty_program_assets_before_compile=False,
+            allow_dirty_scenes_before_compile=False,
+        )
+
+    def _execute_clientsim_profile(
+        self,
+        service: RuntimeValidationService,
+        scene_path: str,
+        profile: str,
+        confirm: bool = False,
+        change_reason: str | None = None,
+        allow_dirty_before: bool = False,
+    ):
+        return service.execute_write_profile(
+            scene_path=scene_path,
+            profile=profile,
+            confirm=confirm,
+            change_reason=change_reason or "",
+            generated_asset_policy="deny",
+            allow_dirty_program_assets_before_compile=False,
+            allow_dirty_scenes_before_compile=allow_dirty_before,
+        )
 
     def test_setup_pops_only_the_watch_dir_env_var(self) -> None:
         """The class setUp pops ``UNITYTOOL_BRIDGE_WATCH_DIR`` only — no
@@ -2901,7 +3100,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             root = Path(temp_dir)
             # No Assets/ directory in *root*.
             svc = RuntimeValidationService(project_root=root)
-            response = svc.compile_udonsharp()
+            response = self._execute_compile_profile(svc)
 
             self.assertEqual("RUN_COMPILE_SKIPPED", response.code)
             self.assertEqual("warning", response.severity.value)
@@ -2914,7 +3113,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             root = Path(temp_dir)
             _create_sample_project(root)
             svc = RuntimeValidationService(project_root=root)
-            response = svc.compile_udonsharp()
+            response = self._execute_compile_profile(svc)
 
             self.assertEqual("RUN_CONFIG_ERROR", response.code)
             self.assertIn("UNITYTOOL_BRIDGE_WATCH_DIR", response.message)
@@ -2950,6 +3149,8 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 "Editor console capture failed.",
                 {
                     "since_timestamp": "2026-07-13T00:00:00Z",
+                    "console_authority": "editor_bridge",
+                    "evidence_available": False,
                     "read_only": True,
                     "executed": True,
                 },
@@ -3053,6 +3254,8 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 True,
                 Severity.INFO,
                 "RUN_EDITOR_CONSOLE_COLLECTED",
+                "editor_bridge",
+                True,
                 2,
                 ["[Log] ready", "plain"],
                 True,
@@ -3061,6 +3264,8 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 response.success,
                 response.severity,
                 response.code,
+                response.data["console_authority"],
+                response.data["evidence_available"],
                 response.data["line_count"],
                 response.data["log_lines"],
                 response.data["executed"],
@@ -3085,7 +3290,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                response = svc.compile_udonsharp()
+                response = self._execute_compile_profile(svc)
 
             self.assertEqual(
                 (
@@ -3113,10 +3318,251 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                 ),
             )
 
-    def test_compile_udonsharp_reaches_unity_via_editor_bridge(self) -> None:
-        """The compile dispatcher writes a request file to the watch
-        directory and surfaces the responder's envelope unchanged.
-        """
+    def test_execute_write_profile_sends_single_validate_runtime_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            write_file(
+                root / "Assets" / "Scenes" / "Smoke.unity",
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n",
+            )
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+
+            def respond(request: dict) -> dict:
+                self.assertEqual(
+                    {
+                        "protocol_version": 2,
+                        "action": "validate_runtime",
+                        "project_root": f"win:{root}",
+                        "scene_path": "win:Assets/Scenes/Smoke.unity",
+                        "profile": "clientsim",
+                        "timeout_sec": 10,
+                        "confirm": True,
+                        "change_reason": "runtime audit",
+                        "generated_asset_policy": "replace",
+                        "allow_dirty_program_assets_before_compile": True,
+                        "allow_dirty_scenes_before_compile": True,
+                    },
+                    request,
+                )
+                return _runtime_bridge_payload(
+                    profile="clientsim",
+                    success=True,
+                    severity="info",
+                    code="RUN_VALIDATE_RUNTIME_OK",
+                    message="runtime validation ok",
+                    compile_executed=True,
+                    compile_success=True,
+                    compile_severity="info",
+                    compile_code="RUN_COMPILE_OK",
+                    clientsim_executed=True,
+                    side_effect_report=_runtime_side_effect_report(),
+                )
+
+            from tests.bridge_test_helpers import EditorBridgeResponder
+
+            with (
+                EditorBridgeResponder(watch_dir, respond),
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
+                    },
+                    clear=False,
+                ),
+                patch(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke.to_windows_path",
+                    side_effect=lambda value: f"win:{value}",
+                ),
+            ):
+                response = svc.execute_write_profile(
+                    scene_path="Assets/Scenes/Smoke.unity",
+                    profile="clientsim",
+                    confirm=True,
+                    change_reason="runtime audit",
+                    generated_asset_policy="replace",
+                    allow_dirty_program_assets_before_compile=True,
+                    allow_dirty_scenes_before_compile=True,
+                )
+
+            self.assertEqual(
+                (True, "RUN_VALIDATE_RUNTIME_OK", True, False),
+                (
+                    response.success,
+                    response.code,
+                    response.data["executed"],
+                    response.data["read_only"],
+                ),
+            )
+
+
+    def test_compile_udonsharp_publication_failure_marker_is_typed_and_cleaned(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _create_sample_project(root)
+            watch_dir = root / "watch"
+            watch_dir.mkdir()
+            svc = RuntimeValidationService(project_root=root)
+            responder_errors: list[BaseException] = []
+
+            import threading
+
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fail_publication() -> None:
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected runtime request before publication failure"
+                        )
+
+                    request_file = observed_request["path"]
+                    request_id = request_file.name.removesuffix(".request.json")
+                    response_tmp = watch_dir / f"{request_id}.response.json.tmp"
+                    failure_marker = (
+                        watch_dir / f"{request_id}.publication-failed.json"
+                    )
+                    response_tmp.write_text("PRIVATE_RUNTIME_RESPONSE", encoding="utf-8")
+                    original_rename(request_file, failure_marker)
+                except BaseException as exc:
+                    responder_errors.append(exc)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
+                        "UNITYTOOL_UNITY_TIMEOUT_SEC": "2",
+                    },
+                    clear=False,
+                ),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                thread = threading.Thread(target=fail_publication)
+                thread.start()
+                response = self._execute_compile_profile(svc)
+                thread.join()
+
+                if responder_errors:
+                    raise responder_errors[0]
+
+                self.assertEqual([], responder_errors)
+                self.assertEqual(
+                    {
+                        "success": False,
+                        "severity": "error",
+                        "code": "RUN_EDITOR_BRIDGE_RESPONSE_PUBLICATION_FAILED",
+                        "message": (
+                            "Editor Bridge processed the runtime request but could "
+                            "not publish its response."
+                        ),
+                        "data": {
+                            "action": "validate_runtime",
+                            "read_only": False,
+                            "executed": False,
+                            "state_unknown": True,
+                        },
+                        "diagnostics": [],
+                    },
+                    response.to_dict(),
+                )
+                self.assertEqual([], list(watch_dir.iterdir()))
+                self.assertNotIn(temp_dir, json.dumps(response.to_dict()))
+                self.assertNotIn(
+                    "PRIVATE_RUNTIME_RESPONSE",
+                    json.dumps(response.to_dict()),
+                )
+
+
+    def test_runtime_protocol_v2_outer_error_is_preserved_and_v1_is_rejected(
+        self,
+    ) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+        from prefab_sentinel.services.runtime_validation.protocol import (
+            parse_runtime_response,
+        )
+
+        outer_failure = _runtime_bridge_payload(
+            profile="compile_only",
+            success=False,
+            severity="error",
+            code="EDITOR_BRIDGE_ERROR",
+            message="Editor Bridge request processing failed.",
+            compile_executed=False,
+            compile_success=False,
+            compile_severity="info",
+            compile_code="",
+            clientsim_executed=False,
+        )
+
+        def parse(payload: object) -> ToolResponse:
+            return parse_runtime_response(
+                payload,
+                action="validate_runtime",
+                project_root=Path("/project"),
+                scene_path="Assets/Scenes/Smoke.unity",
+                profile="compile_only",
+                log_path=Path("/project/Logs/Editor.log"),
+                relative_fn=lambda path: str(path),
+            )
+
+        current = parse(outer_failure)
+        legacy = parse({**outer_failure, "protocol_version": 1})
+
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_ERROR",
+                "Editor Bridge request processing failed.",
+            ),
+            (current.success, current.code, current.message),
+        )
+        self.assertEqual(
+            (False, "RUN_PROTOCOL_ERROR", "error"),
+            (legacy.success, legacy.code, legacy.severity.value),
+        )
+
+    def test_compile_udonsharp_close_failure_remains_typed(self) -> None:
+        secret = "ISSUE163_SECRET_RUNTIME_CLOSE"
+        closed_fds: list[int] = []
+        real_close = os.close
+
+        def close_then_fail(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+            raise OSError(secret)
+
+        class CloseFailingOs:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(os, name)
+
+            def close(self, fd: int) -> None:
+                close_then_fail(fd)
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
@@ -3124,8 +3570,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             watch_dir.mkdir()
             svc = RuntimeValidationService(project_root=root)
 
-            def respond(request: dict) -> dict:
-                self.assertEqual("compile_udonsharp", request["action"])
+            def respond(_: dict) -> dict:
                 return {
                     "success": True,
                     "severity": "info",
@@ -3141,24 +3586,52 @@ class RuntimeValidationServiceTests(unittest.TestCase):
 
             from tests.bridge_test_helpers import EditorBridgeResponder
 
-            with EditorBridgeResponder(watch_dir, respond):
-                with patch.dict(
+            with (
+                EditorBridgeResponder(watch_dir, respond),
+                patch.dict(
                     os.environ,
                     {
                         "UNITYTOOL_BRIDGE_WATCH_DIR": str(watch_dir),
                         "UNITYTOOL_UNITY_TIMEOUT_SEC": "10",
                     },
                     clear=False,
-                ):
-                    response = svc.compile_udonsharp()
+                ),
+                patch(
+                    "prefab_sentinel.bridge_response_io.os",
+                    CloseFailingOs(),
+                ),
+                self.assertLogs(
+                    "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
+                    level="ERROR",
+                ) as captured,
+            ):
+                response = self._execute_compile_profile(svc)
 
-            self.assertEqual("RUN_COMPILE_OK", response.code)
-            self.assertEqual(3, response.data["udon_program_count"])
-            self.assertEqual(
-                True,
-                response.data["executed"],
-                msg=f"bridge compile must report executed=True: {response.data!r}",
-            )
+        public_wire = json.dumps(response.to_dict())
+        self.assertEqual(
+            (
+                False,
+                Severity.ERROR,
+                "RUN_EDITOR_BRIDGE_RESPONSE",
+                "Editor bridge runtime response file could not be read.",
+                1,
+                False,
+                [
+                    "ERROR:prefab_sentinel.services.runtime_validation."
+                    "editor_bridge_invoke:Runtime Editor Bridge response read failed"
+                ],
+            ),
+            (
+                response.success,
+                response.severity,
+                response.code,
+                response.message,
+                len(closed_fds),
+                secret in public_wire,
+                captured.output,
+            ),
+            msg=f"runtime close failure must remain typed and redacted: {response.to_dict()!r}",
+        )
 
     def test_validate_runtime_redacts_write_failure_and_cleans_partial_request(
         self,
@@ -3167,7 +3640,6 @@ class RuntimeValidationServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
-            write_file(root / "Assets" / "Scenes" / "Smoke.unity", "%YAML 1.1\n")
             watch_dir = root / "watch"
             watch_dir.mkdir()
             original_rename = Path.rename
@@ -3195,31 +3667,24 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     level="ERROR",
                 ) as captured,
             ):
-                response = orchestrator.validate_runtime(
-                    scene_path="Assets/Scenes/Smoke.unity"
+                response = self._execute_compile_profile(
+                    orchestrator.runtime_validation
                 )
 
             self.assertEqual(
                 {
-                    "step": "compile_udonsharp",
-                    "result": {
-                        "success": False,
-                        "severity": "error",
-                        "code": "RUN_EDITOR_BRIDGE_WRITE",
-                        "message": "Failed to write editor bridge runtime request file.",
-                        "data": {
-                            "action": "compile_udonsharp",
-                            "read_only": True,
-                            "executed": False,
-                        },
-                        "diagnostics": [],
+                    "success": False,
+                    "severity": "error",
+                    "code": "RUN_EDITOR_BRIDGE_WRITE",
+                    "message": "Failed to write editor bridge runtime request file.",
+                    "data": {
+                        "action": "validate_runtime",
+                        "read_only": True,
+                        "executed": False,
                     },
+                    "diagnostics": [],
                 },
-                response.data["steps"][1],
-                msg=(
-                    "public runtime validation must project only stable transport "
-                    f"metadata: {response.to_dict()!r}"
-                ),
+                response.to_dict(),
             )
             self.assertEqual(
                 [
@@ -3227,24 +3692,11 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     "editor_bridge_invoke:Runtime Editor Bridge request write failed"
                 ],
                 captured.output,
-                msg=f"runtime write log must omit caught exception details: {captured.output!r}",
             )
             serialized = json.dumps(response.to_dict(), sort_keys=True)
-            self.assertNotIn(
-                secret,
-                serialized,
-                msg=f"runtime validation leaked the private write error: {serialized}",
-            )
-            self.assertNotIn(
-                str(watch_dir),
-                serialized,
-                msg=f"runtime validation leaked the watch directory: {serialized}",
-            )
-            self.assertEqual(
-                [],
-                list(watch_dir.iterdir()),
-                msg="failed request rename must not leave an IPC request artifact",
-            )
+            self.assertNotIn(secret, serialized)
+            self.assertNotIn(str(watch_dir), serialized)
+            self.assertEqual([], list(watch_dir.iterdir()))
 
     def test_validate_runtime_redacts_response_status_failure(self) -> None:
         secret = "/secret/runtime-response-status"
@@ -3277,9 +3729,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     level="ERROR",
                 ) as captured,
             ):
-                response = orchestrator.validate_runtime(
-                    scene_path="Assets/Scenes/Smoke.unity"
-                )
+                response = self._execute_compile_profile(orchestrator.runtime_validation)
 
             self.assertEqual(
                 {
@@ -3290,13 +3740,13 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                         "Editor bridge runtime response file status could not be read."
                     ),
                     "data": {
-                        "action": "compile_udonsharp",
+                        "action": "validate_runtime",
                         "read_only": False,
                         "executed": False,
                     },
                     "diagnostics": [],
                 },
-                response.data["steps"][1]["result"],
+                response.to_dict(),
                 msg=f"public response-status envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
@@ -3322,21 +3772,11 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             watch_dir = root / "watch"
             watch_dir.mkdir()
             original_exists = Path.exists
-            original_read_text = Path.read_text
 
             def response_is_ready(path: Path) -> bool:
                 if path.parent == watch_dir and path.name.endswith(".response.json"):
                     return True
                 return original_exists(path)
-
-            def fail_response_read(
-                path: Path,
-                encoding: str | None = None,
-                errors: str | None = None,
-            ) -> str:
-                if path.parent == watch_dir and path.name.endswith(".response.json"):
-                    raise OSError(secret)
-                return original_read_text(path, encoding=encoding, errors=errors)
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             with (
@@ -3349,15 +3789,16 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     clear=False,
                 ),
                 patch.object(Path, "exists", response_is_ready),
-                patch.object(Path, "read_text", fail_response_read),
+                patch(
+                    "prefab_sentinel.bridge_response_io.os.open",
+                    side_effect=OSError(secret),
+                ),
                 self.assertLogs(
                     "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
                     level="ERROR",
                 ) as captured,
             ):
-                response = orchestrator.validate_runtime(
-                    scene_path="Assets/Scenes/Smoke.unity"
-                )
+                response = self._execute_compile_profile(orchestrator.runtime_validation)
 
             self.assertEqual(
                 {
@@ -3366,13 +3807,13 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     "code": "RUN_EDITOR_BRIDGE_RESPONSE",
                     "message": "Editor bridge runtime response file could not be read.",
                     "data": {
-                        "action": "compile_udonsharp",
+                        "action": "validate_runtime",
                         "read_only": False,
                         "executed": False,
                     },
                     "diagnostics": [],
                 },
-                response.data["steps"][1]["result"],
+                response.to_dict(),
                 msg=f"public response-read envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
@@ -3381,7 +3822,10 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     "editor_bridge_invoke:Runtime Editor Bridge response read failed"
                 ],
                 captured.output,
-                msg=f"response-read log must omit caught exception details: {captured.output!r}",
+                msg=(
+                    "response-read log must omit caught exception details: "
+                    f"{captured.output!r}"
+                ),
             )
             self.assertEqual(
                 [],
@@ -3397,27 +3841,12 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             watch_dir = root / "watch"
             watch_dir.mkdir()
             original_exists = Path.exists
-            original_read_text = Path.read_text
 
             def response_is_ready(path: Path) -> bool:
                 if path.parent == watch_dir and path.name.endswith(".response.json"):
+                    path.write_bytes(b"\xff")
                     return True
                 return original_exists(path)
-
-            def fail_response_decode(
-                path: Path,
-                encoding: str | None = None,
-                errors: str | None = None,
-            ) -> str:
-                if path.parent == watch_dir and path.name.endswith(".response.json"):
-                    raise UnicodeDecodeError(
-                        "utf-8",
-                        b"\xff",
-                        0,
-                        1,
-                        "invalid start byte",
-                    )
-                return original_read_text(path, encoding=encoding, errors=errors)
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             with (
@@ -3430,15 +3859,12 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     clear=False,
                 ),
                 patch.object(Path, "exists", response_is_ready),
-                patch.object(Path, "read_text", fail_response_decode),
                 self.assertLogs(
                     "prefab_sentinel.services.runtime_validation.editor_bridge_invoke",
                     level="ERROR",
                 ) as captured,
             ):
-                response = orchestrator.validate_runtime(
-                    scene_path="Assets/Scenes/Smoke.unity"
-                )
+                response = self._execute_compile_profile(orchestrator.runtime_validation)
 
             self.assertEqual(
                 {
@@ -3447,13 +3873,13 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     "code": "RUN_EDITOR_BRIDGE_RESPONSE",
                     "message": "Editor bridge runtime response file could not be read.",
                     "data": {
-                        "action": "compile_udonsharp",
+                        "action": "validate_runtime",
                         "read_only": False,
                         "executed": False,
                     },
                     "diagnostics": [],
                 },
-                response.data["steps"][1]["result"],
+                response.to_dict(),
                 msg=f"invalid UTF-8 response envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
@@ -3494,24 +3920,22 @@ class RuntimeValidationServiceTests(unittest.TestCase):
                     side_effect=[0.0, 2.0],
                 ),
             ):
-                response = orchestrator.validate_runtime(
-                    scene_path="Assets/Scenes/Smoke.unity"
-                )
+                response = self._execute_compile_profile(orchestrator.runtime_validation)
 
             self.assertEqual(
                 {
                     "success": False,
                     "severity": "error",
-                    "code": "RUN_COMPILE_FAILED",
+                    "code": "RUN002",
                     "message": "Editor bridge runtime response timed out.",
                     "data": {
-                        "action": "compile_udonsharp",
+                        "action": "validate_runtime",
                         "read_only": False,
                         "executed": False,
                     },
                     "diagnostics": [],
                 },
-                response.data["steps"][1]["result"],
+                response.to_dict(),
                 msg=f"public timeout envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
@@ -3526,7 +3950,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             _create_sample_project(root)
             svc = RuntimeValidationService(project_root=root)
 
-            response = svc.run_clientsim(
+            response = self._execute_clientsim_profile(svc,
                 "Assets/MissingScene.unity",
                 "clientsim",
                 confirm=True,
@@ -3559,19 +3983,19 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             svc = RuntimeValidationService(project_root=root)
 
             with patch.object(svc, "_invoke_unity_runtime") as invoke:
-                existing_response = svc.run_clientsim(
+                existing_response = self._execute_clientsim_profile(svc,
                     str(existing_scene),
                     "clientsim",
                     confirm=True,
                     change_reason="audit clientsim validation",
                 )
-                missing_response = svc.run_clientsim(
+                missing_response = self._execute_clientsim_profile(svc,
                     str(missing_scene),
                     "clientsim",
                     confirm=True,
                     change_reason="audit clientsim validation",
                 )
-                non_scene_response = svc.run_clientsim(
+                non_scene_response = self._execute_clientsim_profile(svc,
                     str(non_scene),
                     "clientsim",
                     confirm=True,
@@ -3609,7 +4033,7 @@ class RuntimeValidationServiceTests(unittest.TestCase):
             _create_sample_project(root)
             write_file(root / "Assets" / "Scenes" / "Smoke.txt", "not a scene\n")
             svc = RuntimeValidationService(project_root=root)
-            response = svc.run_clientsim(
+            response = self._execute_clientsim_profile(svc,
                 "Assets/Scenes/Smoke.txt",
                 "clientsim",
                 confirm=True,
@@ -3645,18 +4069,26 @@ GameObject:
 
             def respond(request: dict) -> dict:
                 self.assertEqual(
-                    ("run_clientsim", False, True),
-                    (request["action"], request["allow_dirty_before"], request["confirm"]),
+                    ("validate_runtime", False, True),
+                    (
+                        request["action"],
+                        request["allow_dirty_scenes_before_compile"],
+                        request["confirm"],
+                    ),
                     msg=f"ClientSim dirty-scene request mismatch: {request!r}",
                 )
-                return {
-                    "success": False,
-                    "severity": "error",
-                    "code": "CLIENTSIM_DIRTY_SCENE",
-                    "message": "ClientSim refused unsaved active-scene changes before execution.",
-                    "data": {"executed": False, "read_only": True, "dirty_before": True},
-                    "diagnostics": [],
-                }
+                return _runtime_bridge_payload(
+                    profile="clientsim",
+                    success=False,
+                    severity="error",
+                    code="CLIENTSIM_DIRTY_SCENE",
+                    message="ClientSim refused unsaved active-scene changes before execution.",
+                    compile_executed=False,
+                    compile_success=False,
+                    compile_severity="info",
+                    compile_code="",
+                    clientsim_executed=False,
+                )
 
             from tests.bridge_test_helpers import EditorBridgeResponder
 
@@ -3669,7 +4101,7 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = svc.run_clientsim(
+                    response = self._execute_clientsim_profile(svc,
                         "Assets/Scenes/Smoke.unity",
                         "clientsim",
                         confirm=True,
@@ -3737,23 +4169,23 @@ GameObject:
 
             def respond(request: dict) -> dict:
                 self.assertEqual(
-                    ("run_clientsim", True, "audit clientsim validation"),
+                    ("validate_runtime", True, "audit clientsim validation"),
                     (request["action"], request["confirm"], request["change_reason"]),
                     msg=f"ClientSim audited request mismatch: {request!r}",
                 )
-                return {
-                    "success": True,
-                    "severity": "info",
-                    "code": "RUN_CLIENTSIM_OK",
-                    "message": "clientsim ok",
-                    "data": {
-                        "clientsim_ready": True,
-                        "executed": True,
-                        "read_only": False,
-                        "side_effect_report": side_effect_report,
-                    },
-                    "diagnostics": [],
-                }
+                return _runtime_bridge_payload(
+                    profile="clientsim",
+                    success=True,
+                    severity="info",
+                    code="RUN_CLIENTSIM_OK",
+                    message="clientsim ok",
+                    compile_executed=True,
+                    compile_success=True,
+                    compile_severity="info",
+                    compile_code="RUN_COMPILE_OK",
+                    clientsim_executed=True,
+                    side_effect_report=side_effect_report,
+                )
 
             from tests.bridge_test_helpers import EditorBridgeResponder
 
@@ -3766,7 +4198,7 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = svc.run_clientsim(
+                    response = self._execute_clientsim_profile(svc,
                         "Assets/Scenes/Smoke.unity",
                         "clientsim",
                         confirm=True,
@@ -3806,24 +4238,25 @@ GameObject:
             svc = RuntimeValidationService(project_root=root)
 
             def respond(request: dict) -> dict:
-                return {
-                    "success": True,
-                    "severity": "info",
-                    "code": "RUN_CLIENTSIM_OK",
-                    "message": "clientsim ok",
-                    "data": {
-                        "executed": True,
-                        "read_only": False,
-                        "side_effect_report": {
-                            "diff_complete": False,
-                            "dirty_before": False,
-                            "dirty_after": False,
-                            "dirty_count_before": 0,
-                            "dirty_count_after": 0,
-                        },
-                    },
-                    "diagnostics": [],
-                }
+                side_effect_report = _runtime_side_effect_report(
+                    diff_complete=False,
+                    diff_warnings=[
+                        "CLIENTSIM_SIDE_EFFECT_RUNTIME_UNAVAILABLE"
+                    ],
+                )
+                return _runtime_bridge_payload(
+                    profile="clientsim",
+                    success=True,
+                    severity="info",
+                    code="RUN_CLIENTSIM_OK",
+                    message="clientsim ok",
+                    compile_executed=True,
+                    compile_success=True,
+                    compile_severity="info",
+                    compile_code="RUN_COMPILE_OK",
+                    clientsim_executed=True,
+                    side_effect_report=side_effect_report,
+                )
 
             from tests.bridge_test_helpers import EditorBridgeResponder
 
@@ -3836,7 +4269,8 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = svc.run_clientsim(
+                    response = self._execute_clientsim_profile(
+                        svc,
                         "Assets/Scenes/Smoke.unity",
                         "clientsim",
                         confirm=True,
@@ -3845,28 +4279,52 @@ GameObject:
 
             self.assertEqual(
                 (True, "RUN_CLIENTSIM_OK", "warning", False),
-                (response.success, response.code, response.severity.value, response.data["side_effect_report"]["diff_complete"]),
+                (
+                    response.success,
+                    response.code,
+                    response.severity.value,
+                    response.data["side_effect_report"]["diff_complete"],
+                ),
                 msg=f"incomplete ClientSim diff envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
                 ["CLIENTSIM_SIDE_EFFECT_DIFF_UNAVAILABLE"],
-                [diagnostic["code"] for diagnostic in response.to_dict()["diagnostics"]],
+                [
+                    diagnostic["code"]
+                    for diagnostic in response.to_dict()["diagnostics"]
+                ],
                 msg=f"incomplete ClientSim diff diagnostics mismatch: {response.to_dict()!r}",
             )
 
 
     def test_clientsim_transport_deadline_outlives_operation_cleanup(self) -> None:
-        from prefab_sentinel.services.runtime_validation.editor_bridge_invoke import (
-            _transport_timeout_sec,
+        from prefab_sentinel.services.runtime_validation.editor_bridge_transport import (
+            transport_timeout_sec,
         )
 
         self.assertEqual(
-            (45, 10),
+            (45, 10, 10),
             (
-                _transport_timeout_sec("run_clientsim", 10),
-                _transport_timeout_sec("compile_udonsharp", 10),
+                transport_timeout_sec(
+                    action="validate_runtime",
+                    profile="clientsim",
+                    operation_timeout_sec=10,
+                ),
+                transport_timeout_sec(
+                    action="validate_runtime",
+                    profile="compile_only",
+                    operation_timeout_sec=10,
+                ),
+                transport_timeout_sec(
+                    action="run_clientsim",
+                    profile="clientsim",
+                    operation_timeout_sec=10,
+                ),
             ),
-            msg="ClientSim transport must retain a 30s exit grace and 5s dispatch margin.",
+            msg=(
+                "Only validate_runtime(profile=clientsim) receives the 30s "
+                "exit grace and 5s dispatch margin."
+            ),
         )
 
     def test_clientsim_runtime_only_objects_are_not_cleanup_warnings(self) -> None:
@@ -4058,81 +4516,88 @@ GameObject:
         self.assertEqual(1, response.data["count_by_category"]["DUPLICATE_EVENTSYSTEM"])
 
     def test_orchestrator_validate_runtime_pipeline(self) -> None:
+        import json
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             write_file(
                 root / "Assets" / "Scenes" / "Smoke.unity",
-                """%YAML 1.1
---- !u!1 &1
-GameObject:
-  m_Name: Smoke
-""",
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Smoke\n",
             )
-            write_file(root / "Logs" / "Editor.log", "NullReferenceException in UdonBehaviour\n")
+            write_file(
+                root / "Logs" / "Editor.log",
+                "NullReferenceException in UdonBehaviour\n",
+            )
+            report = root / "runtime-report.json"
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
             response = orchestrator.validate_runtime(
                 scene_path="Assets/Scenes/Smoke.unity",
+                profile="compile_only",
                 log_file="Logs/Editor.log",
+                out_report=str(report),
+                confirm=True,
+                change_reason="runtime audit",
             )
 
             self.assertEqual(
                 (False, "VALIDATE_RUNTIME_RESULT", "compile_only"),
                 (response.success, response.code, response.data["profile"]),
-                msg=f"compile-only runtime validation envelope mismatch: {response.to_dict()!r}",
             )
             self.assertEqual(
-                [
-                    "inspect_world_canvas",
-                    "compile_udonsharp",
-                    "collect_unity_console",
-                    "classify_errors",
-                    "assert_no_critical_errors",
-                ],
-                [step["step"] for step in response.data["steps"]],
-                msg=f"compile-only runtime validation steps mismatch: {response.data!r}",
+                (
+                    True,
+                    ["inspect_world_canvas", "validate_runtime"],
+                ),
+                (
+                    response.data["result"]["fail_fast_triggered"],
+                    [
+                        step["step"]
+                        for step in response.data["result"]["steps"]
+                    ],
+                ),
             )
-            step_codes = [
-                step["result"]["code"]
-                for step in response.data["steps"]
-                if isinstance(step, dict) and isinstance(step.get("result"), dict)
-            ]
-            self.assertIn("RUN_CONFIG_ERROR", step_codes)
-            self.assertNotIn("RUN_CLIENTSIM_OK", step_codes)
+            self.assertEqual(
+                response.data,
+                json.loads(report.read_text(encoding="utf-8")),
+            )
 
     def test_orchestrator_validate_runtime_pipeline_uses_editor_bridge_when_configured(self) -> None:
+        import json
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _create_sample_project(root)
             write_file(
                 root / "Assets" / "Scenes" / "Smoke.unity",
-                """%YAML 1.1
---- !u!1 &1
-GameObject:
-  m_Name: Smoke
-""",
+                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Smoke\n",
             )
             watch_dir = root / "watch"
             watch_dir.mkdir()
+            report = root / "runtime-report.json"
 
             def respond(request: dict) -> dict:
-                action = request["action"]
-                if action == "compile_udonsharp":
-                    return {
-                        "success": True,
-                        "severity": "info",
-                        "code": "RUN_COMPILE_OK",
-                        "message": "compile ok",
-                        "data": {"udon_program_count": 3, "executed": True, "read_only": False},
-                        "diagnostics": [],
-                    }
+                if request["action"] == "validate_runtime":
+                    return _runtime_bridge_payload(
+                        profile="compile_only",
+                        success=True,
+                        severity="info",
+                        code="RUN_VALIDATE_RUNTIME_OK",
+                        message="runtime validation ok",
+                        compile_executed=True,
+                        compile_success=True,
+                        compile_severity="info",
+                        compile_code="RUN_COMPILE_OK",
+                        clientsim_executed=False,
+                    )
+                self.assertEqual("capture_console_logs", request["action"])
                 return {
-                    "success": False,
-                    "severity": "error",
-                    "code": "RUN_PROTOCOL_ERROR",
-                    "message": f"unexpected action: {action}",
-                    "data": {"executed": False, "read_only": True},
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_CONSOLE_CAPTURE_OK",
+                    "message": "Console entries captured.",
+                    "data": {"entries": [], "executed": True},
                     "diagnostics": [],
                 }
 
@@ -4148,28 +4613,35 @@ GameObject:
                     },
                     clear=False,
                 ):
-                    response = orchestrator.validate_runtime(scene_path="Assets/Scenes/Smoke.unity")
+                    response = orchestrator.validate_runtime(
+                        scene_path="Assets/Scenes/Smoke.unity",
+                        profile="compile_only",
+                        console_authority="editor_bridge",
+                        out_report=str(report),
+                        confirm=True,
+                        change_reason="runtime audit",
+                    )
 
             self.assertEqual(
                 (True, "VALIDATE_RUNTIME_RESULT", "compile_only"),
                 (response.success, response.code, response.data["profile"]),
-                msg=f"configured compile-only validation envelope mismatch: {response.to_dict()!r}",
             )
-            step_codes = [
-                step["result"]["code"]
-                for step in response.data["steps"]
-                if isinstance(step, dict) and isinstance(step.get("result"), dict)
-            ]
             self.assertEqual(
-                [
-                    "WORLD_CANVAS_INSPECT_OK",
-                    "RUN_COMPILE_OK",
-                    "RUN_LOG_MISSING",
-                    "RUN_CLASSIFY_OK",
-                    "RUN_ASSERT_OK",
-                ],
-                step_codes,
-                msg=f"configured compile-only step codes mismatch: {response.data!r}",
+                "RUN_VALIDATE_RUNTIME_OK",
+                response.data["result"]["steps"][1]["result"]["code"],
+            )
+            self.assertEqual(
+                {
+                    "authority": "editor_bridge",
+                    "available": True,
+                    "collection_code": "RUN_EDITOR_CONSOLE_COLLECTED",
+                    "line_count": 0,
+                },
+                response.data["result"]["console_evidence"],
+            )
+            self.assertEqual(
+                response.data,
+                json.loads(report.read_text(encoding="utf-8")),
             )
 
 
@@ -6581,60 +7053,81 @@ sys.{stream_name}.buffer.write(bytes([255]))
             self.assertIn("REF_SCAN_BROKEN", step_codes)
             self.assertNotIn("SER_APPLY_OK", step_codes)
 
-    def test_orchestrator_patch_apply_runs_runtime_validation_when_scene_provided(self) -> None:
-        """When a runtime scene is supplied and the watch directory is
-        unconfigured, the runtime-validation step short-circuits with
-        the editor-bridge ``RUN_CONFIG_ERROR`` envelope; the overall
-        patch-apply still reports the runtime step in its step list and
-        the surrounding pipeline carries that error severity.
-        """
+    def test_orchestrator_patch_apply_requires_separate_runtime_validation(self) -> None:
+        from prefab_sentinel.contracts import ToolResponse
+
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             assets = root / "Assets"
             assets.mkdir(parents=True, exist_ok=True)
-            scene = assets / "Smoke.unity"
-            scene.write_text("%YAML 1.1\n", encoding="utf-8")
             target = root / "state.json"
             target.write_text(
                 json.dumps({"items": [1, 2], "nested": {"value": 10}}),
                 encoding="utf-8",
             )
+            plan = {
+                "plan_version": 2,
+                "resources": [
+                    {
+                        "id": "state",
+                        "kind": "json",
+                        "path": str(target),
+                        "mode": "open",
+                    }
+                ],
+                "ops": [
+                    {
+                        "resource": "state",
+                        "op": "set",
+                        "component": "Example.Component",
+                        "path": "nested.value",
+                        "value": 42,
+                    }
+                ],
+            }
 
             orchestrator = Phase1Orchestrator.default(project_root=root)
-            response = orchestrator.patch_apply(
-                plan={
-                    "plan_version": 2,
-                    "resources": [
-                        {
-                            "id": "state",
-                            "kind": "json",
-                            "path": str(target),
-                            "mode": "open",
-                        }
-                    ],
-                    "ops": [
-                        {
-                            "resource": "state",
-                            "op": "set",
-                            "component": "Example.Component",
-                            "path": "nested.value",
-                            "value": 42,
-                        }
-                    ],
-                },
-                dry_run=False,
-                confirm=True,
-                scope="Assets",
-                runtime_scene="Assets/Smoke.unity",
+            runtime_response = ToolResponse(
+                False,
+                Severity.ERROR,
+                "VALIDATE_RUNTIME_RESULT",
+                "runtime failed",
+                {},
             )
+            with patch.object(
+                Phase1Orchestrator,
+                "validate_runtime",
+                return_value=runtime_response,
+            ) as validate_runtime:
+                patch_response = orchestrator.patch_apply(
+                    plan=plan,
+                    dry_run=False,
+                    confirm=True,
+                    scope="Assets",
+                )
+                observed_runtime = orchestrator.validate_runtime(
+                    "Assets/Smoke.unity",
+                    profile="compile_only",
+                    out_report="runtime-report.json",
+                    confirm=True,
+                    change_reason="validate committed patch",
+                )
 
-            self.assertEqual("PATCH_APPLY_RESULT", response.code)
-            step_codes = [step["result"]["code"] for step in response.data["steps"]]
+            self.assertEqual("PATCH_APPLY_RESULT", patch_response.code)
+            self.assertEqual("VALIDATE_RUNTIME_RESULT", observed_runtime.code)
+            step_codes = [
+                step["result"]["code"]
+                for step in patch_response.data["steps"]
+            ]
             self.assertIn("REF_SCAN_OK", step_codes)
             self.assertIn("SER_APPLY_OK", step_codes)
-            # When the watch dir is unset, the runtime validation step
-            # short-circuits with the editor-bridge config envelope.
-            self.assertIn("RUN_CONFIG_ERROR", step_codes)
+            validate_runtime.assert_called_once_with(
+                "Assets/Smoke.unity",
+                profile="compile_only",
+                out_report="runtime-report.json",
+                confirm=True,
+                change_reason="validate committed patch",
+            )
 
     def test_invalidate_before_cache_from_populated(self) -> None:
         svc = SerializedObjectService(

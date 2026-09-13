@@ -12,15 +12,19 @@ Two blocks:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import tempfile
+import time
 import unittest
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
+from uuid import UUID
 
 from prefab_sentinel import mcp_tools_session
+from prefab_sentinel.bridge_watch_identity import WatchIdentityObservation
 from prefab_sentinel.session import ProjectSession
 from tests._mcp_tool_recorder import ToolRecorderServer, record_tools
 from tests._typing_helpers import require_list, require_magic_mock, require_mapping
@@ -45,8 +49,37 @@ def _write_bridge_cs(project_root: Path, version: str) -> None:
     )
 
 
-def _register_session_tools(session: ProjectSession) -> ToolRecorderServer:
-    return record_tools(mcp_tools_session.register_session_tools, session)
+def _register_session_tools(
+    session: ProjectSession,
+    *,
+    real_watch_tracker: bool = False,
+) -> ToolRecorderServer:
+    if real_watch_tracker:
+        return record_tools(mcp_tools_session.register_session_tools, session)
+    registered, _ = _register_session_tools_with_observer(
+        session,
+        WatchIdentityObservation("match", "identity_match"),
+    )
+    return registered
+
+def _register_session_tools_with_observer(
+    session: ProjectSession,
+    observation: WatchIdentityObservation,
+    *,
+    side_effect: Callable[..., WatchIdentityObservation] | None = None,
+) -> tuple[ToolRecorderServer, MagicMock]:
+    tracker = MagicMock()
+    if side_effect is None:
+        tracker.observe.return_value = observation
+    else:
+        tracker.observe.side_effect = side_effect
+    with patch.object(
+        mcp_tools_session,
+        "WatchIdentityTracker",
+        return_value=tracker,
+    ):
+        registered = record_tools(mcp_tools_session.register_session_tools, session)
+    return registered, require_magic_mock(tracker.observe, "watch tracker observe")
 
 
 def _patch_session_layer():
@@ -214,13 +247,19 @@ class StatusEditorStateBlock(unittest.TestCase):
         return require_mapping(get_status(), "get_project_status response")
 
     def test_disconnected_bridge_yields_absent_editor_state(self) -> None:
-        # When bridge_status() reports disconnected, the tool must not
-        # invoke send_action and the editor_state field must be null.
+        projection = {
+            "connected": False,
+            "connection_state": "not_configured",
+            "code": "EDITOR_BRIDGE_WATCH_DIR_MISSING",
+            "blocker_class": "watch_dir",
+            "suggested_next_action": (
+                "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+            ),
+        }
         with (
-            patch.object(
-                mcp_tools_session,
-                "bridge_status",
-                return_value={"connected": False, "mode": None, "watch_dir": None},
+            patch(
+                "prefab_sentinel.mcp_tools_session.bridge_status",
+                return_value=projection,
             ),
             patch.object(mcp_tools_session, "send_action") as send,
         ):
@@ -230,9 +269,13 @@ class StatusEditorStateBlock(unittest.TestCase):
         self.assertIsNone(response["data"]["editor_state"])
 
     def test_connected_bridge_returns_four_flag_snapshot(self) -> None:
-        # A connected bridge yields the four-flag snapshot exactly as
-        # returned by the bridge; no extra keys, no field-name drift.
         snapshot = {
+            "unity_version": "2022.3.22f1",
+            "required_packages": [
+                {"name": "com.vrchat.base", "ready": True, "version": "3.10.2"},
+                {"name": "com.vrchat.worlds", "ready": True, "version": "3.10.2"},
+                {"name": "udonsharp", "ready": True, "version": "3.10.2"},
+            ],
             "is_playing": True,
             "is_will_change_playmode": False,
             "is_compiling": True,
@@ -246,15 +289,17 @@ class StatusEditorStateBlock(unittest.TestCase):
             "data": {"editor_state": snapshot},
             "diagnostics": [],
         }
+        projection = {
+            "connected": True,
+            "connection_state": "connected",
+            "code": None,
+            "blocker_class": None,
+            "suggested_next_action": None,
+        }
         with (
-            patch.object(
-                mcp_tools_session,
-                "bridge_status",
-                return_value={
-                    "connected": True,
-                    "mode": "editor",
-                    "watch_dir": "/tmp",
-                },
+            patch(
+                "prefab_sentinel.mcp_tools_session.bridge_status",
+                return_value=projection,
             ),
             patch.object(
                 mcp_tools_session,
@@ -265,38 +310,46 @@ class StatusEditorStateBlock(unittest.TestCase):
             response = self._run_status()
 
         self.assertEqual(snapshot, response["data"]["editor_state"])
+        self.assertEqual("2022.3.22f1", response["data"]["unity_version"])
+        self.assertEqual(snapshot["required_packages"], response["data"]["required_packages"])
 
     def test_bridge_action_failure_yields_absent_editor_state_and_warning(self) -> None:
-        # A failure envelope from the bridge action results in:
-        #   * data.editor_state == None
-        #   * a warning diagnostic whose payload carries the bridge code
-        # Issue #304: session-level diagnostics emit the unified
-        # ``{severity, code, message, data}`` wire shape; the
-        # ``BRIDGE_GET_EDITOR_STATE_FAILED`` code names the failure mode
-        # and ``data.bridge_code`` carries the underlying bridge code.
+        secret = "ISSUE162_SECRET_BRIDGE_FAILURE"
+        private_path = r"D:\private\response.json"
         bridge_failure = {
             "success": False,
             "severity": "error",
-            "code": "EDITOR_BRIDGE_TIMEOUT",
-            "message": "timed out",
-            "data": {},
+            "code": f"{secret}:{private_path}",
+            "message": f"{secret} {private_path}",
+            "data": {
+                "exception": {
+                    "type": "OSError",
+                    "message": secret,
+                    "short_stack": private_path,
+                }
+            },
             "diagnostics": [],
         }
+        projection = {
+            "connected": True,
+            "connection_state": "connected",
+            "code": None,
+            "blocker_class": None,
+            "suggested_next_action": None,
+        }
         with (
-            patch.object(
-                mcp_tools_session,
-                "bridge_status",
-                return_value={
-                    "connected": True,
-                    "mode": "editor",
-                    "watch_dir": "/tmp",
-                },
+            patch(
+                "prefab_sentinel.mcp_tools_session.bridge_status",
+                return_value=projection,
             ),
             patch.object(
                 mcp_tools_session,
                 "send_action",
                 return_value=bridge_failure,
             ),
+            self.assertLogs(
+                "prefab_sentinel.mcp_tools_session", level="ERROR"
+            ) as captured,
         ):
             response = self._run_status()
 
@@ -304,12 +357,26 @@ class StatusEditorStateBlock(unittest.TestCase):
             d for d in response["diagnostics"]
             if d.get("severity") == "warning"
             and d.get("code") == "BRIDGE_GET_EDITOR_STATE_FAILED"
-            and d.get("data", {}).get("bridge_code") == "EDITOR_BRIDGE_TIMEOUT"
+            and d.get("data", {}).get("bridge_code") == "EDITOR_BRIDGE_ERROR"
         ]
+        public_wire = json.dumps(response)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
-            (None, 1),
-            (response["data"]["editor_state"], len(warnings)),
+            (None, 1, False, False, True, True),
+            (
+                response["data"]["editor_state"],
+                len(warnings),
+                secret in public_wire,
+                private_path in public_wire,
+                secret in private_log,
+                private_path in private_log,
+            ),
         )
+        self.assertEqual(
+            "get_editor_state bridge action failed: EDITOR_BRIDGE_ERROR",
+            warnings[0]["message"],
+        )
+        self.assertNotIn("bridge_message", warnings[0]["data"])
 
 
 class ProjectStatusOperatorContextTests(unittest.TestCase):
@@ -324,22 +391,31 @@ class ProjectStatusOperatorContextTests(unittest.TestCase):
         session = ProjectSession(project_root=self.project_root)
         registered = _register_session_tools(session)
         get_status: Callable[[], object] = registered.get("get_project_status")
+        projection = {
+            "connected": True,
+            "connection_state": "connected",
+            "code": None,
+            "blocker_class": None,
+            "suggested_next_action": None,
+        }
         with (
-            patch.object(
-                mcp_tools_session,
-                "bridge_status",
-                return_value={"connected": True, "mode": "editor", "watch_dir": "/tmp"},
-            ),
+            patch(
+                "prefab_sentinel.mcp_tools_session.bridge_status",
+                return_value=projection,
+            ) as bridge_probe,
             patch.object(
                 mcp_tools_session,
                 "send_action",
                 return_value=bridge_envelope,
             ) as send,
         ):
-            return (
-                require_mapping(get_status(), "get_project_status response"),
-                require_magic_mock(send, "send_action mock"),
-            )
+            response = require_mapping(get_status(), "get_project_status response")
+
+        bridge_probe.assert_called_once()
+        return (
+            response,
+            require_magic_mock(send, "send_action mock"),
+        )
 
     def _bridge_envelope(self, actual_root: str) -> dict[str, object]:
         return {
@@ -398,30 +474,111 @@ class ProjectStatusOperatorContextTests(unittest.TestCase):
         send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
 
     def test_bridge_warning_diagnostics_are_merged_into_status(self) -> None:
+        secret = "ISSUE162_SECRET_DIAGNOSTIC"
+        private_path = r"D:\private\request.response.json"
+        traversal_path = f"Assets/../../{secret}/request.json"
+        bridge_envelope = self._bridge_envelope(str(self.project_root))
+        bridge_envelope["severity"] = "warning"
+        data = require_mapping(bridge_envelope["data"], "bridge data")
+        editor_state = require_mapping(data["editor_state"], "bridge editor state")
+        editor_state["active_scene_path"] = traversal_path
+        editor_state["dirty_scene_paths"] = [
+            "Assets/Scenes/Main.unity",
+            traversal_path,
+            private_path,
+        ]
+        editor_state["open_scenes"] = [
+            {
+                "path": "Assets/Scenes/Main.unity",
+                "name": "Main",
+                "is_dirty": False,
+            },
+            {
+                "path": traversal_path,
+                "name": secret,
+                "is_dirty": True,
+            },
+        ]
+        editor_state["unexpected_private_field"] = secret
+        bridge_envelope["diagnostics"] = [
+            {
+                "severity": "warning",
+                "code": f"{secret}:{private_path}",
+                "message": secret,
+                "detail": secret,
+                "path": private_path,
+                "location": "open_scenes",
+                "evidence": f"stack: {secret}",
+                "blocker_class": secret,
+                "state_source": secret,
+                "suggested_next_action": f"{secret} {private_path}",
+            }
+        ]
+
+        with self.assertLogs(
+            "prefab_sentinel.mcp_tools_session", level="WARNING"
+        ) as captured:
+            response, send = self._run_status(bridge_envelope)
+
+        diagnostics = [
+            diagnostic for diagnostic in response["diagnostics"]
+            if diagnostic.get("code") == "BRIDGE_DIAGNOSTIC"
+        ]
+        diagnostic = diagnostics[0] if diagnostics else {}
+        public_wire = json.dumps(response)
+        private_log = "\n".join(captured.output)
+
+        self.assertEqual("warning", response["severity"], response)
+        self.assertEqual(1, len(diagnostics), response["diagnostics"])
+        self.assertEqual("warning", diagnostic.get("severity"))
+        self.assertEqual("BRIDGE_DIAGNOSTIC", diagnostic.get("message"))
+        self.assertEqual(
+            {"location": "open_scenes"},
+            diagnostic.get("data"),
+        )
+        self.assertNotIn(secret, public_wire)
+        self.assertNotIn(private_path, public_wire)
+        self.assertNotIn(traversal_path, public_wire)
+        self.assertIn("Assets/Scenes/Main.unity", public_wire)
+        self.assertIn(secret, private_log)
+        self.assertIn(private_path, private_log)
+        send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
+
+    def test_known_enumeration_diagnostic_keeps_stable_public_mapping(self) -> None:
         bridge_envelope = self._bridge_envelope(str(self.project_root))
         bridge_envelope["severity"] = "warning"
         bridge_envelope["diagnostics"] = [
             {
                 "severity": "warning",
                 "code": "EDITOR_STATE_ENUMERATION_LIMITED",
-                "detail": "Open scene enumeration failed.",
+                "message": "private enumeration detail",
                 "location": "open_scenes",
             }
         ]
 
-        response, send = self._run_status(bridge_envelope)
+        with self.assertLogs(
+            "prefab_sentinel.mcp_tools_session", level="WARNING"
+        ) as captured:
+            response, send = self._run_status(bridge_envelope)
+
         diagnostics = [
             diagnostic for diagnostic in response["diagnostics"]
             if diagnostic.get("code") == "EDITOR_STATE_ENUMERATION_LIMITED"
         ]
         diagnostic = diagnostics[0] if diagnostics else {}
 
-        self.assertEqual("warning", response["severity"], response)
         self.assertEqual(1, len(diagnostics), response["diagnostics"])
         self.assertEqual("warning", diagnostic.get("severity"))
-        self.assertEqual("Open scene enumeration failed.", diagnostic.get("message"))
-        self.assertEqual("open_scenes", diagnostic.get("data", {}).get("location"))
-        send.assert_called_once_with(action="get_editor_state", expected_project_root=None)
+        self.assertEqual(
+            "Unity Editor state enumeration was limited.",
+            diagnostic.get("message"),
+        )
+        self.assertEqual({"location": "open_scenes"}, diagnostic.get("data"))
+        self.assertIn("private enumeration detail", "\n".join(captured.output))
+        send.assert_called_once_with(
+            action="get_editor_state",
+            expected_project_root=None,
+        )
 
     def test_mismatching_actual_root_reports_warning_without_failing_status(self) -> None:
         actual_root = str(self.project_root.parent / "OtherProject")
@@ -464,8 +621,11 @@ class EditorStatusBlockerClassifierTests(unittest.TestCase):
         classify_status_blockers, _ = self._classifiers()
 
         blockers = classify_status_blockers(
-            {"configured_watch_dir": "/expected/watch"},
-            {"connected": True, "watch_dir": "/actual/watch"},
+            {},
+            {
+                "connected": False,
+                "code": "EDITOR_BRIDGE_WATCH_DIR_MISMATCH",
+            },
             {
                 "state_source": "live_editor",
                 "is_compiling": True,
@@ -475,6 +635,7 @@ class EditorStatusBlockerClassifierTests(unittest.TestCase):
                 "has_unsaved_changes": True,
                 "dirty_scene_paths": ["Assets/Scenes/Main.unity"],
             },
+            configured_watch_dir=None,
         )
 
         by_class = {blocker["blocker_class"]: blocker for blocker in blockers}
@@ -482,12 +643,13 @@ class EditorStatusBlockerClassifierTests(unittest.TestCase):
             "watch_dir": {
                 "blocker_class": "watch_dir",
                 "state_source": "bridge_transport",
-                "message": "Configured watch directory differs from the Bridge-reported watch directory.",
-                "suggested_next_action": "Use the same watch directory for Codex and the Unity Editor Bridge.",
-                "evidence": {
-                    "configured_watch_dir": "/expected/watch",
-                    "bridge_watch_dir": "/actual/watch",
-                },
+                "message": (
+                    "Configured watch directory differs from the active Unity "
+                    "Editor Bridge watch directory."
+                ),
+                "suggested_next_action": (
+                    "Use the same watch directory for Codex and the Unity Editor Bridge."
+                ),
             },
             "compile_or_build": {
                 "blocker_class": "compile_or_build",
@@ -553,23 +715,321 @@ class ProjectStatusBlockerTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.project_root, self.scope = _make_project(self._tmp)
 
-    def _run_status(self, bridge_envelope: dict[str, object]) -> dict[str, Any]:
+    def _run_status(
+        self,
+        bridge_envelope: dict[str, object],
+    ) -> dict[str, Any]:
         session = ProjectSession(project_root=self.project_root)
         registered = _register_session_tools(session)
         get_status: Callable[[], object] = registered.get("get_project_status")
+        projection = {
+            "connected": True,
+            "connection_state": "connected",
+            "code": None,
+            "blocker_class": None,
+            "suggested_next_action": None,
+        }
         with (
-            patch.object(
-                mcp_tools_session,
-                "bridge_status",
-                return_value={"connected": True, "mode": "editor", "watch_dir": "/tmp"},
-            ),
+            patch(
+                "prefab_sentinel.mcp_tools_session.bridge_status",
+                return_value=projection,
+            ) as bridge_probe,
             patch.object(
                 mcp_tools_session,
                 "send_action",
                 return_value=bridge_envelope,
             ),
         ):
-            return require_mapping(get_status(), "get_project_status response")
+            response = require_mapping(get_status(), "get_project_status response")
+
+        bridge_probe.assert_called_once()
+        return response
+
+    def _run_status_with_watch(
+        self,
+        watch_dir: str,
+    ) -> tuple[dict[str, Any], MagicMock]:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {"editor_state": {}},
+            "diagnostics": [],
+        }
+        session = ProjectSession(project_root=self.project_root)
+        registered = _register_session_tools(session)
+        get_status: Callable[[], object] = registered.get("get_project_status")
+        with (
+            patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: watch_dir}),
+            patch.object(
+                mcp_tools_session,
+                "send_action",
+                return_value=bridge_envelope,
+            ) as send,
+        ):
+            response = require_mapping(get_status(), "get_project_status response")
+        return response, require_magic_mock(send, "send_action mock")
+
+    def test_fresh_watch_identity_mismatch_is_path_free_and_skips_live_request(
+        self,
+    ) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        secret_marker = "a" * 32
+        secret_status = "/private/ISSUE179_SECRET/status.json"
+        secret_timestamp = "1700000000000"
+        secret_exception = "ISSUE179_SECRET_OSERROR"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir) / "ISSUE179_SECRET_WATCH"
+            watch_dir.mkdir()
+            secret_watch = str(watch_dir)
+            observation = WatchIdentityObservation(
+                "mismatch",
+                (
+                    f"marker={secret_marker} status={secret_status} "
+                    f"updated_at={secret_timestamp} error={secret_exception}"
+                ),
+            )
+            session = ProjectSession(project_root=self.project_root)
+            registered, observe = _register_session_tools_with_observer(
+                session,
+                observation,
+            )
+            get_status: Callable[[], object] = registered.get("get_project_status")
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: secret_watch}),
+                patch.object(mcp_tools_session, "send_action") as send,
+            ):
+                response = require_mapping(
+                    get_status(),
+                    "get_project_status response",
+                )
+
+        data = require_mapping(response["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        blockers = require_list(data["blockers"], "status blockers")
+        self.assertEqual(
+            (True, "warning", "SESSION_STATUS"),
+            (response["success"], response["severity"], response["code"]),
+        )
+        self.assertEqual(
+            (
+                "misconfigured",
+                "EDITOR_BRIDGE_WATCH_DIR_MISMATCH",
+                "watch_dir",
+                1,
+            ),
+            (
+                bridge["connection_state"],
+                bridge["code"],
+                require_mapping(blockers[0], "first blocker")["blocker_class"],
+                len(blockers),
+            ),
+        )
+        self.assertEqual(Path(secret_watch), observe.call_args.kwargs["watch_dir"])
+        send.assert_not_called()
+        public_wire = json.dumps(response)
+        for private_value in (
+            secret_watch,
+            secret_marker,
+            secret_status,
+            secret_timestamp,
+            secret_exception,
+        ):
+            self.assertNotIn(private_value, public_wire)
+
+    def test_fresh_watch_without_marker_creates_identity_before_live_request(
+        self,
+    ) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+        from prefab_sentinel.bridge_watch_identity import (
+            BRIDGE_STATUS_RELATIVE_PATH,
+            WATCH_IDENTITY_MARKER_FILENAME,
+        )
+
+        marker_identity = "1a2b3c4d5e6f78900123456789abcdef"
+        timestamp = time.time_ns() // 1_000_000
+        watch_dir = self.project_root / "ISSUE179_SECRET_WATCH"
+        watch_dir.mkdir()
+        status_path = self.project_root / BRIDGE_STATUS_RELATIVE_PATH
+        status_path.parent.mkdir(parents=True)
+        status_content = json.dumps(
+            {
+                "schema_version": 1,
+                "watch_identity": "0" * 32,
+                "bridge_session_id": "c" * 32,
+                "bridge_instance_id": "d" * 32,
+                "updated_at_unix_ms": timestamp,
+            },
+            separators=(",", ":"),
+        )
+        status_path.write_text(status_content, encoding="utf-8")
+        session = ProjectSession(project_root=self.project_root)
+        registered = _register_session_tools(
+            session,
+            real_watch_tracker=True,
+        )
+        get_status: Callable[[], object] = registered.get("get_project_status")
+
+        with (
+            patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(watch_dir)}),
+            patch(
+                "prefab_sentinel.bridge_watch_identity.uuid.uuid4",
+                return_value=UUID(marker_identity),
+            ),
+            patch.object(mcp_tools_session, "send_action") as send,
+        ):
+            response = require_mapping(get_status(), "get_project_status response")
+
+        data = require_mapping(response["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        blockers = require_list(data["blockers"], "status blockers")
+        marker_path = watch_dir / WATCH_IDENTITY_MARKER_FILENAME
+        self.assertEqual(
+            (True, "warning", "SESSION_STATUS"),
+            (response["success"], response["severity"], response["code"]),
+        )
+        self.assertEqual(
+            {
+                "connected": False,
+                "connection_state": "misconfigured",
+                "code": "EDITOR_BRIDGE_WATCH_DIR_MISMATCH",
+                "blocker_class": "watch_dir",
+                "suggested_next_action": (
+                    "Use the same watch directory for Codex and the Unity Editor Bridge."
+                ),
+            },
+            bridge,
+        )
+        self.assertEqual(
+            [
+                {
+                    "blocker_class": "watch_dir",
+                    "state_source": "bridge_transport",
+                    "message": (
+                        "Configured watch directory differs from the active Unity "
+                        "Editor Bridge watch directory."
+                    ),
+                    "suggested_next_action": (
+                        "Use the same watch directory for Codex and the Unity Editor Bridge."
+                    ),
+                }
+            ],
+            blockers,
+        )
+        self.assertEqual(str(self.project_root), data["project_root"])
+        self.assertEqual(str(self.project_root), data["expected_project_root"])
+        self.assertIsInstance(data["session_id"], str)
+        self.assertTrue(data["session_id"])
+        self.assertEqual(marker_identity.encode("ascii"), marker_path.read_bytes())
+        self.assertEqual(32, len(marker_path.read_bytes()))
+        send.assert_not_called()
+        public_wire = json.dumps(response)
+        for private_value in (
+            str(watch_dir),
+            marker_identity,
+            str(status_path),
+            status_content,
+            str(timestamp),
+        ):
+            self.assertNotIn(private_value, public_wire)
+
+    def test_fresh_watch_identity_match_preserves_live_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            response, send = self._run_status_with_watch(tmpdir)
+
+        self.assertTrue(response["success"])
+        send.assert_called_once_with(
+            action="get_editor_state",
+            expected_project_root=None,
+        )
+
+    def test_watch_dir_classification_uses_captured_path_after_observer_mutates_env(
+        self,
+    ) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            captured_watch_dir = Path(tmpdir) / "captured"
+            captured_watch_dir.mkdir()
+            changed_watch_dir = str(Path(tmpdir) / "ambient-change")
+
+            def mutate_env_and_match(**_: object) -> WatchIdentityObservation:
+                os.environ[BRIDGE_WATCH_DIR_ENV] = changed_watch_dir
+                return WatchIdentityObservation("match", "identity_match")
+
+            session = ProjectSession(project_root=self.project_root)
+            registered, _ = _register_session_tools_with_observer(
+                session,
+                WatchIdentityObservation("match", "identity_match"),
+                side_effect=mutate_env_and_match,
+            )
+            get_status: Callable[[], object] = registered.get("get_project_status")
+            bridge_envelope = {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+                "message": "ok",
+                "data": {"editor_state": {}},
+                "diagnostics": [],
+            }
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: str(captured_watch_dir)},
+                ),
+                patch.object(
+                    mcp_tools_session,
+                    "send_action",
+                    return_value=bridge_envelope,
+                ) as send,
+            ):
+                response = require_mapping(
+                    get_status(),
+                    "get_project_status response",
+                )
+
+        data = require_mapping(response["data"], "status data")
+        self.assertEqual([], data["blockers"])
+        send.assert_called_once_with(
+            action="get_editor_state",
+            expected_project_root=None,
+        )
+
+    def test_unavailable_watch_identity_blocks_live_request(
+        self,
+    ) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            session = ProjectSession(project_root=self.project_root)
+            registered, _ = _register_session_tools_with_observer(
+                session,
+                WatchIdentityObservation("unavailable", "status_unavailable"),
+            )
+            get_status: Callable[[], object] = registered.get("get_project_status")
+            with (
+                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}),
+                patch.object(mcp_tools_session, "send_action") as send,
+            ):
+                response = require_mapping(
+                    get_status(),
+                    "get_project_status response",
+                )
+
+        data = require_mapping(response["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        self.assertEqual(
+            ("EDITOR_BRIDGE_STATUS_UNAVAILABLE", 1),
+            (
+                bridge["code"],
+                len(require_list(data["blockers"], "status blockers")),
+            ),
+        )
+        send.assert_not_called()
 
     def test_live_editor_dirty_identities_and_blockers_stay_successful(self) -> None:
         bridge_envelope = {
@@ -631,95 +1091,56 @@ class ProjectStatusBlockerTests(unittest.TestCase):
             ),
         )
 
-    def test_public_status_reports_configured_watch_dir_mismatch(self) -> None:
+    def test_public_status_redacts_invalid_configured_watch_dir(self) -> None:
         from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
 
-        bridge_envelope = {
-            "success": True,
-            "severity": "info",
-            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
-            "message": "ok",
-            "data": {
-                "watch_dir": "/bridge/watch",
-                "editor_state": {
-                    "state_source": "live_editor",
-                    "is_playing": False,
-                    "is_will_change_playmode": False,
-                    "is_compiling": False,
-                    "is_building_player": False,
-                    "has_unsaved_changes": False,
-                    "dirty_scene_paths": [],
-                    "dirty_prefab_paths": [],
-                    "dirty_material_paths": [],
-                    "dirty_asset_paths": [],
-                },
-            },
-            "diagnostics": [],
-        }
+        secret = "ISSUE162_SECRET_BLOCKER_PROBE"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir) / "watch"
+            watch_dir.mkdir()
+            original_is_dir = Path.is_dir
 
-        with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: "/configured/watch"}):
-            response = self._run_status(bridge_envelope)
+            def fail_watch_dir_probe(path: Path) -> bool:
+                if path == watch_dir:
+                    raise OSError(secret)
+                return original_is_dir(path)
 
-        data = response["data"]
-        watch_dir_blockers = [
-            blocker
-            for blocker in data["blockers"]
-            if blocker["blocker_class"] == "watch_dir"
-        ]
-        self.assertEqual(
-            (
-                "/configured/watch",
-                [
-                    {
-                        "blocker_class": "watch_dir",
-                        "state_source": "bridge_transport",
-                        "message": "Configured watch directory differs from the Bridge-reported watch directory.",
-                        "suggested_next_action": "Use the same watch directory for Codex and the Unity Editor Bridge.",
-                        "evidence": {
-                            "configured_watch_dir": "/configured/watch",
-                            "bridge_watch_dir": "/tmp",
-                        },
-                    }
-                ],
-            ),
-            (data["configured_watch_dir"], watch_dir_blockers),
-        )
-
-    def test_public_status_reports_invalid_configured_watch_dir(self) -> None:
-        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
-
-        with tempfile.NamedTemporaryFile() as tmp_file:
             session = ProjectSession(project_root=self.project_root)
             registered = _register_session_tools(session)
             get_status: Callable[[], object] = registered.get("get_project_status")
-            with (
-                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmp_file.name}),
-                patch.object(
-                    mcp_tools_session,
-                    "bridge_status",
-                    return_value={
-                        "connected": False,
-                        "mode": "editor",
-                        "watch_dir": tmp_file.name,
-                    },
-                ),
-            ):
-                response = require_mapping(get_status(), "get_project_status response")
-                data = require_mapping(response["data"], "get_project_status data")
-                expected_watch_dir = tmp_file.name
+            try:
+                Path.is_dir = fail_watch_dir_probe  # type: ignore[assignment]
+                with patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: str(watch_dir)},
+                ):
+                    response = require_mapping(
+                        get_status(),
+                        "get_project_status response",
+                    )
+            finally:
+                Path.is_dir = original_is_dir  # type: ignore[assignment]
 
+        data = require_mapping(response["data"], "get_project_status data")
+        self.assertNotIn("configured_watch_dir", data)
         self.assertEqual(
             [
                 {
                     "blocker_class": "watch_dir",
                     "state_source": "bridge_transport",
-                    "message": "Configured Editor Bridge watch directory is not an existing directory.",
-                    "suggested_next_action": "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory.",
-                    "evidence": {"configured_watch_dir": expected_watch_dir},
+                    "message": (
+                        "Editor Bridge watch directory is missing, invalid, or not writable."
+                    ),
+                    "suggested_next_action": (
+                        "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                    ),
                 }
             ],
             data["blockers"],
         )
+        public_wire = json.dumps(response)
+        self.assertNotIn(secret, public_wire)
+        self.assertNotIn(str(watch_dir), public_wire)
 
     def test_editor_state_failure_diagnostic_includes_bridge_connection_blocker(self) -> None:
         bridge_failure = {
@@ -858,6 +1279,42 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
             "diagnostics": [],
         }
 
+    def _assert_no_freshness_markers(
+        self,
+        bridge_response: dict[str, object],
+    ) -> None:
+        from prefab_sentinel import mcp_tools_symbols
+
+        tools = self._register()
+        get_unity_symbols: Callable[..., object] = tools.get("get_unity_symbols")
+        find_unity_symbol: Callable[..., object] = tools.get("find_unity_symbol")
+        with patch.object(
+            mcp_tools_symbols,
+            "bridge_status",
+            return_value={"connected": True, "watch_dir": "/tmp"},
+        ), patch.object(
+            mcp_tools_symbols,
+            "send_action",
+            return_value=bridge_response,
+        ):
+            payloads = {
+                "get_unity_symbols": require_mapping(
+                    get_unity_symbols(asset_path=str(self.prefab)),
+                    "get_unity_symbols payload",
+                ),
+                "find_unity_symbol": require_mapping(
+                    find_unity_symbol(
+                        asset_path=str(self.prefab),
+                        symbol_path="Cube",
+                    ),
+                    "find_unity_symbol payload",
+                ),
+            }
+
+        for tool_name, payload in payloads.items():
+            with self.subTest(tool_name=tool_name):
+                self.assertNotIn("freshness", payload)
+
     def test_marker_present_when_connected_and_unsaved(self) -> None:
         """T-40-1: get_unity_symbols carries the marker when live edits are unsaved."""
         from prefab_sentinel import mcp_tools_symbols
@@ -918,6 +1375,432 @@ class TestEditorStateFreshnessMarker(unittest.TestCase):
                 "get_unity_symbols payload",
             )
         self.assertNotIn("freshness", payload)
+
+    def test_no_marker_for_malformed_truthy_editor_state_response(self) -> None:
+        bridge_response: dict[str, object] = {
+            "success": "false",
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "malformed success",
+            "data": {
+                "editor_state": {
+                    "has_unsaved_changes": True,
+                }
+            },
+            "diagnostics": [],
+        }
+
+        self._assert_no_freshness_markers(bridge_response)
+
+    def test_no_marker_for_valid_soft_negative_editor_state_response(self) -> None:
+        bridge_response: dict[str, object] = {
+            "success": False,
+            "severity": "warning",
+            "code": "EDITOR_CTRL_EDITOR_STATE_PENDING",
+            "message": "state snapshot unavailable",
+            "data": {
+                "editor_state": {
+                    "has_unsaved_changes": True,
+                }
+            },
+            "diagnostics": [],
+        }
+
+        self._assert_no_freshness_markers(bridge_response)
+
+class ProjectStatusHeartbeatTests(unittest.TestCase):
+    MARKER = "b" * 32
+    PRIVATE_TIMESTAMP = 10_000
+
+    def setUp(self) -> None:
+        from prefab_sentinel.bridge_watch_identity import (
+            BRIDGE_STATUS_RELATIVE_PATH,
+            WATCH_IDENTITY_MARKER_FILENAME,
+        )
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project_root, self.scope = _make_project(self._tmp)
+        self.watch_dir = self.project_root / "ISSUE194_PRIVATE_WATCH"
+        self.watch_dir.mkdir()
+        (self.watch_dir / WATCH_IDENTITY_MARKER_FILENAME).write_text(
+            self.MARKER,
+            encoding="ascii",
+        )
+        self.status_path = self.project_root / BRIDGE_STATUS_RELATIVE_PATH
+        self.status_path.parent.mkdir(parents=True)
+        self.session = ProjectSession(project_root=self.project_root)
+        self.registered = _register_session_tools(
+            self.session,
+            real_watch_tracker=True,
+        )
+        self.get_status: Callable[[], object] = self.registered.get(
+            "get_project_status"
+        )
+        self.activate: Callable[..., Coroutine[Any, Any, object]] = (
+            self.registered.get("activate_project")
+        )
+
+    def _write_status(
+        self,
+        *,
+        updated_at_unix_ms: int = PRIVATE_TIMESTAMP,
+    ) -> str:
+        payload = json.dumps(
+            {
+                "schema_version": 1,
+                "watch_identity": self.MARKER,
+                "bridge_session_id": "c" * 32,
+                "bridge_instance_id": "d" * 32,
+                "updated_at_unix_ms": updated_at_unix_ms,
+            },
+            separators=(",", ":"),
+        )
+        self.status_path.write_text(payload, encoding="utf-8")
+        return payload
+
+    def _run_status(
+        self,
+        now_unix_ms: int,
+    ) -> tuple[dict[str, Any], MagicMock]:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        bridge_envelope = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {"editor_state": {}},
+            "diagnostics": [],
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {BRIDGE_WATCH_DIR_ENV: str(self.watch_dir)},
+            ),
+            patch.object(
+                mcp_tools_session.time,
+                "time_ns",
+                return_value=now_unix_ms * 1_000_000,
+            ),
+            patch.object(
+                mcp_tools_session,
+                "send_action",
+                return_value=bridge_envelope,
+            ) as send,
+        ):
+            response = require_mapping(
+                self.get_status(),
+                "get_project_status response",
+            )
+        return response, require_magic_mock(send, "send_action mock")
+
+    def test_transient_missing_is_warning_without_blocker_or_live_request(
+        self,
+    ) -> None:
+        private_payload = self._write_status()
+        connected, connected_send = self._run_status(self.PRIVATE_TIMESTAMP)
+        self.assertTrue(connected["success"])
+        connected_send.assert_called_once()
+
+        self.status_path.unlink()
+        transient, transient_send = self._run_status(
+            self.PRIVATE_TIMESTAMP + 5_000
+        )
+
+        data = require_mapping(transient["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        diagnostics = require_list(transient["diagnostics"], "status diagnostics")
+        self.assertEqual(
+            (True, "warning", "SESSION_STATUS"),
+            (
+                transient["success"],
+                transient["severity"],
+                transient["code"],
+            ),
+        )
+        self.assertEqual(
+            {
+                "connected": False,
+                "connection_state": "unavailable",
+                "code": "EDITOR_BRIDGE_STATUS_TRANSIENT",
+                "blocker_class": None,
+                "suggested_next_action": None,
+            },
+            bridge,
+        )
+        self.assertEqual([], data["blockers"])
+        self.assertIsNone(data["editor_state"])
+        diagnostic_codes = [
+            require_mapping(diagnostic, "status diagnostic")["code"]
+            for diagnostic in diagnostics
+        ]
+        self.assertEqual(
+            1,
+            diagnostic_codes.count("EDITOR_BRIDGE_STATUS_TRANSIENT"),
+        )
+        transient_send.assert_not_called()
+        public_wire = json.dumps(transient)
+        for private_value in (
+            str(self.watch_dir),
+            str(self.status_path),
+            self.MARKER,
+            str(self.PRIVATE_TIMESTAMP),
+            private_payload,
+        ):
+            self.assertNotIn(private_value, public_wire)
+
+    def test_inclusive_transient_boundary_recovers_live_status(self) -> None:
+        self._write_status()
+        before, before_send = self._run_status(self.PRIVATE_TIMESTAMP)
+        before_send.assert_called_once()
+        self.assertTrue(
+            require_mapping(
+                require_mapping(before["data"], "before data")["bridge"],
+                "before bridge",
+            )["connected"]
+        )
+
+        self.status_path.unlink()
+        transient, transient_send = self._run_status(
+            self.PRIVATE_TIMESTAMP + 5_000
+        )
+        transient_data = require_mapping(transient["data"], "transient data")
+        self.assertEqual(
+            ("EDITOR_BRIDGE_STATUS_TRANSIENT", [], None),
+            (
+                require_mapping(
+                    transient_data["bridge"],
+                    "transient bridge",
+                )["code"],
+                require_list(transient_data["blockers"], "transient blockers"),
+                transient_data["editor_state"],
+            ),
+        )
+        transient_send.assert_not_called()
+
+        recovered_at = self.PRIVATE_TIMESTAMP + 5_000
+        self._write_status(updated_at_unix_ms=recovered_at)
+        recovered, recovered_send = self._run_status(recovered_at)
+        recovered_data = require_mapping(recovered["data"], "recovered data")
+        recovered_bridge = require_mapping(
+            recovered_data["bridge"],
+            "recovered bridge",
+        )
+        self.assertEqual(
+            (True, "connected", None, [], {}),
+            (
+                recovered_bridge["connected"],
+                recovered_bridge["connection_state"],
+                recovered_bridge["code"],
+                require_list(recovered_data["blockers"], "recovered blockers"),
+                recovered_data["editor_state"],
+            ),
+        )
+        recovered_send.assert_called_once_with(
+            action="get_editor_state",
+            expected_project_root=None,
+        )
+
+    def test_persistent_missing_has_one_connection_blocker_and_recovers(
+        self,
+    ) -> None:
+        self._write_status()
+        _, connected_send = self._run_status(self.PRIVATE_TIMESTAMP)
+        connected_send.assert_called_once()
+        self.status_path.unlink()
+
+        persistent, persistent_send = self._run_status(
+            self.PRIVATE_TIMESTAMP + 5_001
+        )
+        data = require_mapping(persistent["data"], "persistent status data")
+        bridge = require_mapping(data["bridge"], "persistent status bridge")
+        blockers = require_list(data["blockers"], "persistent blockers")
+        self.assertEqual(
+            {
+                "connected": False,
+                "connection_state": "unavailable",
+                "code": "EDITOR_BRIDGE_STATUS_UNAVAILABLE",
+                "blocker_class": "bridge_connection",
+                "suggested_next_action": (
+                    "Confirm Unity is running and the PrefabSentinel Editor "
+                    "Bridge watcher is active."
+                ),
+            },
+            bridge,
+        )
+        self.assertEqual(
+            [
+                {
+                    "blocker_class": "bridge_connection",
+                    "state_source": "bridge_transport",
+                    "message": "Editor Bridge status artifact is unavailable.",
+                    "suggested_next_action": (
+                        "Confirm Unity is running and the PrefabSentinel Editor "
+                        "Bridge watcher is active."
+                    ),
+                }
+            ],
+            blockers,
+        )
+        self.assertIsNone(data["editor_state"])
+        persistent_send.assert_not_called()
+
+        self._write_status(updated_at_unix_ms=20_000)
+        recovered, recovered_send = self._run_status(20_000)
+        recovered_data = require_mapping(recovered["data"], "recovered status data")
+        recovered_bridge = require_mapping(
+            recovered_data["bridge"],
+            "recovered status bridge",
+        )
+        self.assertEqual(
+            (True, "connected", None, []),
+            (
+                recovered_bridge["connected"],
+                recovered_bridge["connection_state"],
+                recovered_bridge["code"],
+                recovered_data["blockers"],
+            ),
+        )
+        recovered_send.assert_called_once()
+
+    def test_initial_missing_and_permission_failure_are_persistent_and_redacted(
+        self,
+    ) -> None:
+        private_exception = "ISSUE194_PRIVATE_PERMISSION"
+        initial, initial_send = self._run_status(1)
+        initial_data = require_mapping(initial["data"], "initial status data")
+        initial_bridge = require_mapping(
+            initial_data["bridge"],
+            "initial status bridge",
+        )
+        self.assertEqual(
+            ("EDITOR_BRIDGE_STATUS_UNAVAILABLE", 1),
+            (
+                initial_bridge["code"],
+                len(require_list(initial_data["blockers"], "initial blockers")),
+            ),
+        )
+        initial_send.assert_not_called()
+
+        with patch(
+            "prefab_sentinel.bridge_watch_identity._read_status",
+            side_effect=PermissionError(private_exception),
+        ):
+            permission, permission_send = self._run_status(2)
+        self.assertEqual(
+            "EDITOR_BRIDGE_STATUS_UNAVAILABLE",
+            require_mapping(
+                require_mapping(permission["data"], "permission data")["bridge"],
+                "permission bridge",
+            )["code"],
+        )
+        permission_send.assert_not_called()
+        self.assertNotIn(private_exception, json.dumps(permission))
+
+    def test_successful_activation_resets_prior_freshness(self) -> None:
+        self._write_status()
+        self._run_status(self.PRIVATE_TIMESTAMP)
+        self.status_path.unlink()
+        transient, transient_send = self._run_status(self.PRIVATE_TIMESTAMP + 1)
+        self.assertEqual(
+            "EDITOR_BRIDGE_STATUS_TRANSIENT",
+            require_mapping(
+                require_mapping(transient["data"], "transient data")["bridge"],
+                "transient bridge",
+            )["code"],
+        )
+        transient_send.assert_not_called()
+
+        patches = _patch_session_layer()
+        with patches[0], patches[1]:
+            activated = require_mapping(
+                asyncio.run(
+                    self.activate(
+                        scope=str(self.scope),
+                        project_root=str(self.project_root),
+                    )
+                ),
+                "activate_project response",
+            )
+        self.assertTrue(activated["success"])
+
+        reset_status, reset_send = self._run_status(self.PRIVATE_TIMESTAMP + 2)
+        reset_data = require_mapping(reset_status["data"], "reset status data")
+        self.assertEqual(
+            "EDITOR_BRIDGE_STATUS_UNAVAILABLE",
+            require_mapping(reset_data["bridge"], "reset status bridge")["code"],
+        )
+        self.assertEqual(1, len(require_list(reset_data["blockers"], "reset blockers")))
+        reset_send.assert_not_called()
+
+    def test_failed_activation_preserves_prior_freshness(self) -> None:
+        self._write_status()
+        self._run_status(self.PRIVATE_TIMESTAMP)
+        self.status_path.unlink()
+
+        patches = _patch_session_layer()
+        with patches[0], patches[1]:
+            rejected = require_mapping(
+                asyncio.run(
+                    self.activate(
+                        scope=str(self.scope),
+                        project_root=str(self.project_root / "missing"),
+                    )
+                ),
+                "activate_project response",
+            )
+        self.assertFalse(rejected["success"])
+
+        status, send = self._run_status(self.PRIVATE_TIMESTAMP + 2)
+        data = require_mapping(status["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        self.assertEqual(
+            ("EDITOR_BRIDGE_STATUS_TRANSIENT", []),
+            (
+                bridge["code"],
+                require_list(data["blockers"], "status blockers"),
+            ),
+        )
+        send.assert_not_called()
+
+    def test_unconfigured_watch_dir_keeps_existing_setup_projection(self) -> None:
+        from prefab_sentinel.bridge_constants import BRIDGE_WATCH_DIR_ENV
+
+        with (
+            patch.dict(
+                os.environ,
+                {BRIDGE_WATCH_DIR_ENV: ""},
+            ),
+            patch.object(mcp_tools_session, "send_action") as send,
+            self.assertNoLogs(
+                "prefab_sentinel.bridge_watch_identity",
+                level="ERROR",
+            ),
+        ):
+            status = require_mapping(
+                self.get_status(),
+                "get_project_status response",
+            )
+
+        data = require_mapping(status["data"], "status data")
+        bridge = require_mapping(data["bridge"], "status bridge")
+        blockers = require_list(data["blockers"], "status blockers")
+        self.assertEqual(
+            (
+                "not_configured",
+                "EDITOR_BRIDGE_WATCH_DIR_MISSING",
+                "watch_dir",
+                1,
+            ),
+            (
+                bridge["connection_state"],
+                bridge["code"],
+                require_mapping(blockers[0], "watch blocker")["blocker_class"],
+                len(blockers),
+            ),
+        )
+        send.assert_not_called()
 
 
 if __name__ == "__main__":

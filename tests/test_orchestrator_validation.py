@@ -1146,9 +1146,8 @@ class ValidateRuntimeProfileTests(unittest.TestCase):
         runtime = MagicMock()
         runtime.project_root = Path("/")
         runtime.assert_no_critical_errors = MagicMock()
-        runtime.compile_udonsharp.return_value = self._make_response("RUN_COMPILE_OK", Severity.INFO, True)
-        runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_OK",
+        runtime.execute_write_profile.return_value = self._make_response(
+            "RUN_VALIDATE_RUNTIME_OK",
             Severity.INFO,
             True,
             data={"read_only": False, "executed": True},
@@ -1165,42 +1164,13 @@ class ValidateRuntimeProfileTests(unittest.TestCase):
             True,
             data={"log_lines": [], "read_only": True},
         )
-        runtime.classify_errors.return_value = self._make_response("RUN_CLASSIFY_OK", Severity.INFO, True)
-        runtime.assert_no_critical_errors.return_value = self._make_response("RUN_ASSERT_OK", Severity.INFO, True)
+        runtime.classify_errors.return_value = self._make_response(
+            "RUN_CLASSIFY_OK", Severity.INFO, True
+        )
+        runtime.assert_no_critical_errors.return_value = self._make_response(
+            "RUN_ASSERT_OK", Severity.INFO, True
+        )
         return runtime
-
-    def test_validate_runtime_default_profile_never_runs_clientsim(self) -> None:
-        from prefab_sentinel.contracts import Severity
-        from prefab_sentinel.orchestrator_validation import validate_runtime
-
-        runtime = self._runtime_with_log_steps()
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            scene_path = self._write_scene(temp_dir)
-            response = validate_runtime(runtime, scene_path)
-
-        self.assertEqual(
-            (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
-            (response.success, response.code, response.severity),
-            msg=f"compile-only validation envelope mismatch: {response.to_dict()!r}",
-        )
-        self.assertEqual(
-            "compile_only",
-            response.data["profile"],
-            msg=f"default validation profile mismatch: {response.data!r}",
-        )
-        self.assertEqual(
-            [
-                "inspect_world_canvas",
-                "compile_udonsharp",
-                "collect_unity_console",
-                "classify_errors",
-                "assert_no_critical_errors",
-            ],
-            [step["step"] for step in response.data["steps"]],
-            msg=f"default validation step sequence must exclude ClientSim: {response.data!r}",
-        )
-        runtime.run_clientsim.assert_not_called()
 
     def test_validate_runtime_rejects_unknown_profile(self) -> None:
         from prefab_sentinel.contracts import Severity
@@ -1220,8 +1190,7 @@ class ValidateRuntimeProfileTests(unittest.TestCase):
         self.assertIn("compile_only", response.message)
         self.assertIn("editor_console_only", response.message)
         self.assertIn("clientsim", response.message)
-        runtime.compile_udonsharp.assert_not_called()
-        runtime.run_clientsim.assert_not_called()
+        runtime.execute_write_profile.assert_not_called()
 
     def test_validate_runtime_editor_console_only_uses_console_without_clientsim(self) -> None:
         from prefab_sentinel.contracts import Severity
@@ -1254,100 +1223,1116 @@ class ValidateRuntimeProfileTests(unittest.TestCase):
             msg=f"console-only step sequence must exclude compile and ClientSim: {response.data!r}",
         )
         runtime.collect_unity_console.assert_not_called()
-        runtime.compile_udonsharp.assert_not_called()
-        runtime.run_clientsim.assert_not_called()
+        runtime.execute_write_profile.assert_not_called()
 
-    def test_clientsim_profile_runs_full_side_effect_sequence(self) -> None:
+    def test_write_profile_bridge_failure_is_published(self) -> None:
+        import json
+
         from prefab_sentinel.contracts import Severity
         from prefab_sentinel.orchestrator_validation import validate_runtime
 
-        runtime = self._runtime_with_log_steps()
-        runtime.run_clientsim.return_value = self._make_response(
-            "RUN_CLIENTSIM_OK",
-            Severity.INFO,
-            True,
-            data={"read_only": False, "executed": True},
-        )
-
         with tempfile.TemporaryDirectory() as temp_dir:
-            scene_path = self._write_scene(temp_dir)
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            runtime.execute_write_profile.return_value = self._make_response(
+                "RUN_VALIDATE_RUNTIME_FAILED",
+                Severity.ERROR,
+                False,
+                data={"read_only": False, "executed": True},
+            )
+            report = root / "Audit" / "bridge-failure.json"
+
             response = validate_runtime(
                 runtime,
                 scene_path,
                 profile="clientsim",
+                out_report=str(report),
                 confirm=True,
-                change_reason="audit clientsim validation",
+                change_reason="runtime audit",
             )
 
-        self.assertEqual(
-            [
-                "inspect_world_canvas",
-                "compile_udonsharp",
-                "run_clientsim",
-                "collect_unity_console",
-                "classify_errors",
-                "assert_no_critical_errors",
-            ],
-            [step["step"] for step in response.data["steps"]],
-            msg=f"clientsim profile step sequence mismatch: {response.data!r}",
+            published = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual((False, "VALIDATE_RUNTIME_RESULT"), (response.success, response.code))
+            self.assertEqual(response.data, published)
+            self.assertEqual(
+                "RUN_VALIDATE_RUNTIME_FAILED",
+                published["result"]["steps"][1]["result"]["code"],
+            )
+
+    @staticmethod
+    def _audited_runtime(project_root: Path):
+        from unittest.mock import MagicMock
+
+        from prefab_sentinel.contracts import Severity
+
+        runtime = MagicMock()
+        runtime.project_root = project_root
+        runtime.assert_no_critical_errors = MagicMock()
+        runtime.execute_write_profile.return_value = ValidateRuntimeProfileTests._make_response(
+            "RUN_VALIDATE_RUNTIME_OK",
+            Severity.INFO,
+            True,
+            data={
+                "read_only": False,
+                "executed": True,
+                "compile": ValidateRuntimeProfileTests._compile_section(),
+                "clientsim": ValidateRuntimeProfileTests._clientsim_section(),
+            },
         )
-        runtime.run_clientsim.assert_called_once_with(
-            scene_path,
-            "clientsim",
-            confirm=True,
-            change_reason="audit clientsim validation",
-            allow_dirty_before=False,
+        runtime.collect_unity_console.return_value = ValidateRuntimeProfileTests._make_response(
+            "RUN_LOG_COLLECTED",
+            Severity.INFO,
+            True,
+            data={
+                "line_count": 0,
+                "log_lines": [],
+                "console_authority": "unity_log",
+                "evidence_available": True,
+                "read_only": True,
+            },
+        )
+        runtime.collect_editor_console.return_value = ValidateRuntimeProfileTests._make_response(
+            "RUN_EDITOR_CONSOLE_COLLECTED",
+            Severity.INFO,
+            True,
+            data={
+                "line_count": 0,
+                "log_lines": [],
+                "console_authority": "editor_bridge",
+                "evidence_available": True,
+                "read_only": True,
+            },
+        )
+        runtime.classify_errors.return_value = ValidateRuntimeProfileTests._make_response(
+            "RUN_CLASSIFY_OK",
+            Severity.INFO,
+            True,
+            data={
+                "read_only": True,
+                "categories_by_severity": {
+                    "critical": 0,
+                    "error": 0,
+                    "warning": 0,
+                },
+            },
+        )
+        runtime.assert_no_critical_errors.return_value = ValidateRuntimeProfileTests._make_response(
+            "RUN_ASSERT_OK",
+            Severity.INFO,
+            True,
+        )
+        return runtime
+
+    @staticmethod
+    def _audited_project(temp_dir: str) -> tuple[Path, str]:
+        root = Path(temp_dir)
+        scene = root / "Assets" / "Scenes" / "Runtime.unity"
+        scene.parent.mkdir(parents=True)
+        scene.write_text("%YAML 1.1\n--- !u!1 &1\nGameObject:\n", encoding="utf-8")
+        (root / "Audit").mkdir()
+        return root, "Assets/Scenes/Runtime.unity"
+
+
+    @staticmethod
+    def _compile_section(
+        *,
+        executed: bool = True,
+        success: bool = True,
+        severity: str = "info",
+        code: str = "RUN_COMPILE_OK",
+        delta_updates: dict[str, object] | None = None,
+        diagnostics: list[dict[str, str]] | None = None,
+    ) -> dict[str, object]:
+        delta: dict[str, object] = {
+            "newly_dirty_paths": [],
+            "no_longer_dirty_paths": [],
+            "newly_dirty_scene_paths": [],
+            "no_longer_dirty_scene_paths": [],
+            "planned_created_paths": [],
+            "planned_deleted_paths": [],
+            "actual_created_paths": [],
+            "actual_deleted_paths": [],
+            "unrelated_dirty_paths_before": [],
+            "unrelated_dirty_paths_after": [],
+            "attribution_unknown": [],
+        }
+        if delta_updates is not None:
+            delta.update(delta_updates)
+        snapshot: dict[str, object] = {
+            "inventory_stable": True,
+            "prefab_repair_paths": [],
+            "related_assets": [],
+            "loaded_scenes": [],
+            "generated_asset_plan": {
+                "planned_created_paths": [],
+                "planned_deleted_paths": [],
+            },
+            "project_dirty_paths": [],
+        }
+        return {
+            "executed": executed,
+            "success": success,
+            "severity": severity,
+            "code": code,
+            "program_count": 1 if executed else 0,
+            "before": snapshot,
+            "after": {
+                **snapshot,
+                "generated_asset_plan": {
+                    "planned_created_paths": [],
+                    "planned_deleted_paths": [],
+                },
+            },
+            "delta": delta,
+            "generated_assets": {
+                "planned_created_paths": delta["planned_created_paths"],
+                "planned_deleted_paths": delta["planned_deleted_paths"],
+                "actual_created_paths": delta["actual_created_paths"],
+                "actual_deleted_paths": delta["actual_deleted_paths"],
+            },
+            "diagnostics": diagnostics or [],
+        }
+
+    @staticmethod
+    def _clientsim_section(
+        *,
+        executed: bool = False,
+        initial_scene_snapshot: list[dict] | None = None,
+    ) -> dict:
+        snapshot = {
+            "Roots": ["World"],
+            "Hierarchy": ["World"],
+            "Components": ["World:UnityEngine.Transform"],
+            "AssetChangeCandidates": [],
+            "Dirty": False,
+            "DirtyCount": 0,
+        }
+        side_effect_report = {
+            "diff_complete": True,
+            "diff_warnings": [],
+            "scene_path": "Assets/Scenes/Runtime.unity",
+            "roots_before": ["World"],
+            "roots_runtime": ["World"],
+            "roots_after": ["World"],
+            "hierarchy_before": ["World"],
+            "hierarchy_runtime": ["World"],
+            "hierarchy_after": ["World"],
+            "components_before": ["World:UnityEngine.Transform"],
+            "components_runtime": ["World:UnityEngine.Transform"],
+            "components_after": ["World:UnityEngine.Transform"],
+            "added_gameobjects": [],
+            "removed_gameobjects": [],
+            "added_components": [],
+            "removed_components": [],
+            "residual_added_gameobjects": [],
+            "residual_removed_gameobjects": [],
+            "residual_added_components": [],
+            "residual_removed_components": [],
+            "dirty_before": False,
+            "dirty_runtime": False,
+            "dirty_after": False,
+            "dirty_count_before": 0,
+            "dirty_count_runtime": 0,
+            "dirty_count_after": 0,
+            "asset_change_candidates": [],
+        }
+        return {
+            "executed": executed,
+            "initial_scene_snapshot": initial_scene_snapshot or [],
+            "before": snapshot if executed else None,
+            "runtime": snapshot if executed else None,
+            "after": snapshot if executed else None,
+            "side_effect_report": side_effect_report if executed else None,
+        }
+
+    @staticmethod
+    def _report_artifacts(report: Path) -> list[str]:
+        return sorted(
+            path.name
+            for path in report.parent.iterdir()
+            if path != report
         )
 
-    def test_clientsim_step_error_aborts_pipeline(self) -> None:
-        from prefab_sentinel.contracts import Severity
+    def test_required_profile_rejects_none_empty_and_whitespace_before_reservation(self) -> None:
         from prefab_sentinel.orchestrator_validation import validate_runtime
         from tests._assertion_helpers import assert_error_envelope
 
-        runtime = self._runtime_with_log_steps()
-        runtime.run_clientsim.return_value = self._make_response("RUN_CLIENTSIM_FAILED", Severity.ERROR, False)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            for index, profile in enumerate((None, "", "  \t")):
+                with self.subTest(profile=profile):
+                    runtime = self._audited_runtime(root)
+                    report = root / "Audit" / f"required-{index}.json"
+
+                    response = validate_runtime(
+                        runtime,
+                        scene_path,
+                        profile=profile,
+                    )
+
+                    assert_error_envelope(
+                        response,
+                        code="RUN_PROFILE_REQUIRED",
+                        severity="error",
+                        field="profile",
+                        message_match=r"^profile is required\.$",
+                    )
+                    self.assertEqual("profile is required.", response.message)
+                    self.assertFalse(report.exists())
+                    runtime.execute_write_profile.assert_not_called()
+
+    def test_unknown_nonblank_profile_pins_supported_list_without_reservation(self) -> None:
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            scene_path = self._write_scene(temp_dir)
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            report = root / "Audit" / "unsupported.json"
+
             response = validate_runtime(
                 runtime,
                 scene_path,
-                profile="clientsim",
-                confirm=True,
-                change_reason="audit clientsim validation",
+                profile="smoke",
             )
 
-        assert_error_envelope(
-            response,
-            code="VALIDATE_RUNTIME_RESULT",
-            severity="error",
-            message_match=r"fail-fast policy",
-            data={
-                "scene_path": scene_path,
-                "profile": "clientsim",
-                "read_only": True,
-                "fail_fast_triggered": True,
-                "steps": [
-                    {"step": "inspect_world_canvas", "result": self._canvas_step_result(scene_path)},
-                    {
-                        "step": "compile_udonsharp",
-                        "result": self._stub_step_result(
-                            success=True,
-                            severity="info",
-                            code="RUN_COMPILE_OK",
-                        ),
-                    },
-                    {
-                        "step": "run_clientsim",
-                        "result": self._stub_step_result(
-                            success=False,
+            assert_error_envelope(
+                response,
+                code="VALIDATE_RUNTIME_PROFILE_UNSUPPORTED",
+                severity="error",
+                field="profile",
+                message_match=(
+                    r"^Unsupported runtime validation profile\. Supported profiles: "
+                    r"compile_only, editor_console_only, clientsim\.$"
+                ),
+            )
+            self.assertFalse(report.exists())
+            runtime.execute_write_profile.assert_not_called()
+
+    def test_compile_only_rejects_unknown_console_authority_before_reservation(self) -> None:
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="compile_only",
+                console_authority="automatic",
+            )
+
+            assert_error_envelope(
+                response,
+                code="RUN_CONSOLE_AUTHORITY_UNSUPPORTED",
+                severity="error",
+                field="console_authority",
+                message_match=(
+                    r"^Unsupported compile-only Console authority\. Supported "
+                    r"authorities: unity_log, editor_bridge\.$"
+                ),
+            )
+            self.assertEqual("automatic", response.data["console_authority"])
+            self.assertFalse(response.data["executed"])
+            runtime.execute_write_profile.assert_not_called()
+
+    def test_write_profiles_reject_missing_or_invalid_report_before_bridge_dispatch(self) -> None:
+        import re
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            for profile in ("compile_only", "clientsim"):
+                for out_report, code, message in (
+                    (None, "OUT_REPORT_REQUIRED", "out_report is required when confirm=True."),
+                    ("Assets/runtime.json", "OUT_REPORT_INVALID", "out_report must be outside Assets/."),
+                ):
+                    with self.subTest(profile=profile, out_report=out_report):
+                        runtime = self._audited_runtime(root)
+
+                        response = validate_runtime(
+                            runtime,
+                            scene_path,
+                            profile=profile,
+                            out_report=out_report,
+                            confirm=True,
+                            change_reason="runtime audit",
+                        )
+
+                        assert_error_envelope(
+                            response,
+                            code=code,
                             severity="error",
-                            code="RUN_CLIENTSIM_FAILED",
-                        ),
+                            message_match="^" + re.escape(message) + "$",
+                        )
+                        runtime.execute_write_profile.assert_not_called()
+
+    def test_reserved_report_publishes_every_audit_rejection(self) -> None:
+        import json
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            cases = (
+                (False, "runtime audit"),
+                (True, ""),
+                (True, "   "),
+            )
+            for profile in ("compile_only", "clientsim"):
+                for index, (confirm, reason) in enumerate(cases):
+                    with self.subTest(profile=profile, confirm=confirm, reason=reason):
+                        runtime = self._audited_runtime(root)
+                        report = root / "Audit" / f"{profile}-audit-{index}.json"
+
+                        response = validate_runtime(
+                            runtime,
+                            scene_path,
+                            profile=profile,
+                            out_report=str(report),
+                            confirm=confirm,
+                            change_reason=reason,
+                        )
+
+                        assert_error_envelope(
+                            response,
+                            code="CHANGE_REASON_REQUIRED",
+                            severity="error",
+                            message_match=r"validate_runtime requires confirm=True AND a non-empty change_reason",
+                        )
+                        published = json.loads(report.read_text(encoding="utf-8"))
+                        self.assertEqual(response.data, published)
+                        self.assertEqual(
+                            ("runtime_validation_report.v1", "CHANGE_REASON_REQUIRED"),
+                            (published["schema_version"], published["result"]["code"]),
+                        )
+                        runtime.execute_write_profile.assert_not_called()
+
+    def test_invalid_generated_asset_policy_publishes_terminal_report_without_dispatch(self) -> None:
+        import json
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            for profile in ("compile_only", "clientsim"):
+                with self.subTest(profile=profile):
+                    runtime = self._audited_runtime(root)
+                    report = root / "Audit" / f"{profile}-policy.json"
+
+                    response = validate_runtime(
+                        runtime,
+                        scene_path,
+                        profile=profile,
+                        out_report=str(report),
+                        confirm=True,
+                        change_reason="runtime audit",
+                        generated_asset_policy="merge",
+                    )
+
+                    assert_error_envelope(
+                        response,
+                        code="GENERATED_ASSET_POLICY_INVALID",
+                        severity="error",
+                    )
+                    self.assertEqual(
+                        "generated_asset_policy",
+                        response.data["result"]["field"],
+                    )
+                    self.assertEqual(
+                        response.data,
+                        json.loads(report.read_text(encoding="utf-8")),
+                    )
+                    runtime.execute_write_profile.assert_not_called()
+
+    def test_write_profile_rejections_do_not_inspect_world_canvas(self) -> None:
+        from unittest.mock import patch
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from tests._assertion_helpers import assert_error_envelope
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            for profile in ("compile_only", "clientsim"):
+                cases = (
+                    (
+                        "report",
+                        {
+                            "out_report": None,
+                            "confirm": True,
+                            "change_reason": "runtime audit",
+                        },
+                        "OUT_REPORT_REQUIRED",
+                    ),
+                    (
+                        "audit",
+                        {
+                            "out_report": str(
+                                root / "Audit" / f"{profile}-audit-rejection.json"
+                            ),
+                            "confirm": False,
+                            "change_reason": "runtime audit",
+                        },
+                        "CHANGE_REASON_REQUIRED",
+                    ),
+                    (
+                        "policy",
+                        {
+                            "out_report": str(
+                                root / "Audit" / f"{profile}-policy-rejection.json"
+                            ),
+                            "confirm": True,
+                            "change_reason": "runtime audit",
+                            "generated_asset_policy": "merge",
+                        },
+                        "GENERATED_ASSET_POLICY_INVALID",
+                    ),
+                )
+                for label, arguments, code in cases:
+                    with self.subTest(profile=profile, rejection=label):
+                        runtime = self._audited_runtime(root)
+                        with patch(
+                            "prefab_sentinel.orchestrator_validation._inspect_world_canvas_step"
+                        ) as inspect_world_canvas:
+                            response = validate_runtime(
+                                runtime,
+                                scene_path,
+                                profile=profile,
+                                **arguments,
+                            )
+
+                        assert_error_envelope(
+                            response,
+                            code=code,
+                            severity="error",
+                        )
+                        inspect_world_canvas.assert_not_called()
+                        runtime.execute_write_profile.assert_not_called()
+
+    def test_write_profiles_forward_policy_publish_report_and_return_report_as_data(self) -> None:
+        import json
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            for profile in ("compile_only", "clientsim"):
+                with self.subTest(profile=profile):
+                    runtime = self._audited_runtime(root)
+                    report = root / "Audit" / f"{profile}-success.json"
+
+                    response = validate_runtime(
+                        runtime,
+                        scene_path,
+                        profile=profile,
+                        out_report=str(report),
+                        confirm=True,
+                        change_reason="  runtime audit  ",
+                        generated_asset_policy="replace",
+                        allow_dirty_program_assets_before_compile=True,
+                        allow_dirty_scenes_before_compile=True,
+                    )
+
+                    published = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual((True, "VALIDATE_RUNTIME_RESULT"), (response.success, response.code))
+                    self.assertEqual(response.data, published)
+                    self.assertEqual(
+                        {
+                            "confirm": True,
+                            "change_reason": "runtime audit",
+                            "generated_asset_policy": "replace",
+                            "allow_dirty_program_assets_before_compile": True,
+                            "allow_dirty_scenes_before_compile": True,
+                        },
+                        published["audit"],
+                    )
+                    runtime.execute_write_profile.assert_called_once_with(
+                        scene_path=scene_path,
+                        profile=profile,
+                        confirm=True,
+                        change_reason="runtime audit",
+                        generated_asset_policy="replace",
+                        allow_dirty_program_assets_before_compile=True,
+                        allow_dirty_scenes_before_compile=True,
+                    )
+
+
+    def test_terminal_reports_preserve_sections_and_cleanup_artifacts(self) -> None:
+        import json
+
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        cases = (
+            (
+                "clean_success",
+                True,
+                Severity.INFO,
+                "RUN_VALIDATE_RUNTIME_OK",
+                self._compile_section(),
+                self._clientsim_section(),
+            ),
+            (
+                "dirty_warning",
+                True,
+                Severity.WARNING,
+                "RUN_VALIDATE_RUNTIME_OK",
+                self._compile_section(
+                    severity="warning",
+                    delta_updates={
+                        "newly_dirty_paths": ["Assets/Program.asset"],
                     },
-                ],
-            },
+                    diagnostics=[
+                        {
+                            "path": "Assets/Program.asset",
+                            "location": "validate_runtime.compile",
+                            "detail": "compile_dirty_side_effect",
+                            "evidence": "asset became dirty",
+                        }
+                    ],
+                ),
+                self._clientsim_section(),
+            ),
+            (
+                "generated_warning",
+                True,
+                Severity.WARNING,
+                "RUN_VALIDATE_RUNTIME_OK",
+                self._compile_section(
+                    severity="warning",
+                    delta_updates={
+                        "planned_created_paths": [
+                            "Assets/SerializedUdonPrograms/new.asset"
+                        ],
+                        "actual_created_paths": [
+                            "Assets/SerializedUdonPrograms/new.asset"
+                        ],
+                    },
+                ),
+                self._clientsim_section(),
+            ),
+            (
+                "dirty_override_limitation",
+                True,
+                Severity.WARNING,
+                "RUN_VALIDATE_RUNTIME_OK",
+                self._compile_section(
+                    severity="warning",
+                    delta_updates={
+                        "attribution_unknown": [
+                            "dirty_program_asset_override"
+                        ],
+                    },
+                ),
+                self._clientsim_section(),
+            ),
+            (
+                "compile_exception_partial_delta",
+                False,
+                Severity.ERROR,
+                "RUN_COMPILE_EXCEPTION",
+                self._compile_section(
+                    success=False,
+                    severity="error",
+                    code="RUN_COMPILE_EXCEPTION",
+                    delta_updates={
+                        "planned_created_paths": [
+                            "Assets/SerializedUdonPrograms/new.asset"
+                        ],
+                        "attribution_unknown": [
+                            "post_compile_snapshot_incomplete"
+                        ],
+                    },
+                ),
+                self._clientsim_section(),
+            ),
+            (
+                "clientsim_preflight_rejection",
+                False,
+                Severity.ERROR,
+                "CLIENTSIM_DIRTY_SCENE",
+                self._compile_section(
+                    executed=False,
+                    success=False,
+                    severity="info",
+                    code="",
+                ),
+                self._clientsim_section(
+                    initial_scene_snapshot=[
+                        {
+                            "path": "Assets/Scenes/Runtime.unity",
+                            "handle": 7,
+                            "dirty": True,
+                            "attribution_unknown": [],
+                        }
+                    ]
+                ),
+            ),
+            (
+                "compile_failure_before_clientsim",
+                False,
+                Severity.ERROR,
+                "RUN_COMPILE_FAILED",
+                self._compile_section(
+                    success=False,
+                    severity="error",
+                    code="RUN_COMPILE_FAILED",
+                ),
+                self._clientsim_section(),
+            ),
+            (
+                "clientsim_terminal_failure",
+                False,
+                Severity.ERROR,
+                "RUN_CLIENTSIM_FAILED",
+                self._compile_section(),
+                self._clientsim_section(executed=True),
+            ),
         )
+
+        for (
+            label,
+            execute_success,
+            execute_severity,
+            execute_code,
+            compile_section,
+            clientsim_section,
+        ) in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root, scene_path = self._audited_project(temp_dir)
+                    runtime = self._audited_runtime(root)
+                    runtime.execute_write_profile.return_value = self._make_response(
+                        execute_code,
+                        execute_severity,
+                        execute_success,
+                        data={
+                            "read_only": not (
+                                compile_section["executed"]
+                                or clientsim_section["executed"]
+                            ),
+                            "executed": bool(
+                                compile_section["executed"]
+                                or clientsim_section["executed"]
+                            ),
+                            "compile": compile_section,
+                            "clientsim": clientsim_section,
+                        },
+                    )
+                    report = root / "Audit" / f"{label}.json"
+
+                    response = validate_runtime(
+                        runtime,
+                        scene_path,
+                        profile=(
+                            "clientsim"
+                            if label.startswith("clientsim")
+                            else "compile_only"
+                        ),
+                        out_report=str(report),
+                        confirm=True,
+                        change_reason="runtime audit",
+                        allow_warnings=True,
+                    )
+
+                    written = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(response.data["compile"], written["compile"])
+                    self.assertEqual(response.data["clientsim"], written["clientsim"])
+                    self.assertEqual(response.data["preflight"], written["preflight"])
+                    self.assertEqual(response.data, written)
+                    self.assertGreater(report.stat().st_size, 0)
+                    self.assertEqual([], self._report_artifacts(report))
+                    expected_steps = (
+                        ["inspect_world_canvas", "validate_runtime"]
+                        if not execute_success
+                        else [
+                            "inspect_world_canvas",
+                            "validate_runtime",
+                            "collect_unity_console",
+                            "classify_errors",
+                            "assert_no_critical_errors",
+                        ]
+                    )
+                    self.assertEqual(
+                        (not execute_success, expected_steps),
+                        (
+                            written["result"]["fail_fast_triggered"],
+                            [
+                                step["step"]
+                                for step in written["result"]["steps"]
+                            ],
+                        ),
+                    )
+
+    def test_allow_warnings_only_controls_console_assertion(self) -> None:
+        import json
+
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from prefab_sentinel.services.runtime_validation.classification import (
+            assert_no_critical_errors,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            compile_section = self._compile_section(
+                severity="warning",
+                diagnostics=[
+                    {
+                        "path": "Assets/Program.asset",
+                        "location": "validate_runtime.compile",
+                        "detail": "compile_dirty_side_effect",
+                        "evidence": "asset became dirty",
+                    }
+                ],
+            )
+            runtime.execute_write_profile.return_value = self._make_response(
+                "RUN_VALIDATE_RUNTIME_OK",
+                Severity.WARNING,
+                True,
+                data={
+                    "read_only": False,
+                    "executed": True,
+                    "compile": compile_section,
+                    "clientsim": self._clientsim_section(),
+                },
+            )
+            report = root / "Audit" / "compile-warning.json"
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="compile_only",
+                out_report=str(report),
+                confirm=True,
+                change_reason="runtime audit",
+                allow_warnings=True,
+            )
+
+            written = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                (True, "warning", "compile_dirty_side_effect"),
+                (
+                    response.success,
+                    response.severity.value,
+                    written["compile"]["diagnostics"][0]["detail"],
+                ),
+            )
+            self.assertEqual([], self._report_artifacts(report))
+
+        for allow_warnings, expected_success, expected_assert_code in (
+            (False, False, "RUN_WARNINGS"),
+            (True, True, "RUN_ASSERT_OK"),
+        ):
+            with self.subTest(allow_warnings=allow_warnings):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root, scene_path = self._audited_project(temp_dir)
+                    runtime = self._audited_runtime(root)
+                    runtime.classify_errors.return_value = self._make_response(
+                        "RUN_CLASSIFY_OK",
+                        Severity.WARNING,
+                        True,
+                        data={
+                            "read_only": True,
+                            "categories_by_severity": {
+                                "critical": 0,
+                                "error": 0,
+                                "warning": 1,
+                            },
+                        },
+                    )
+                    runtime.assert_no_critical_errors.side_effect = (
+                        assert_no_critical_errors
+                    )
+                    report = (
+                        root
+                        / "Audit"
+                        / f"console-warning-{allow_warnings}.json"
+                    )
+
+                    response = validate_runtime(
+                        runtime,
+                        scene_path,
+                        profile="compile_only",
+                        out_report=str(report),
+                        confirm=True,
+                        change_reason="runtime audit",
+                        allow_warnings=allow_warnings,
+                    )
+
+                    written = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(
+                        (
+                            expected_success,
+                            "warning",
+                            "info",
+                            expected_assert_code,
+                        ),
+                        (
+                            response.success,
+                            response.severity.value,
+                            written["compile"]["severity"],
+                            written["result"]["steps"][-1]["result"]["code"],
+                        ),
+                    )
+                    self.assertEqual([], self._report_artifacts(report))
+
+    def test_compile_only_missing_log_fails_without_clean_assertion(self) -> None:
+        import json
+
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            compile_section = self._compile_section()
+            runtime.execute_write_profile.return_value.data["compile"] = compile_section
+            runtime.collect_unity_console.return_value = self._make_response(
+                "RUN_LOG_MISSING",
+                Severity.WARNING,
+                True,
+                data={
+                    "line_count": 0,
+                    "log_lines": [],
+                    "console_authority": "unity_log",
+                    "evidence_available": False,
+                    "read_only": True,
+                },
+            )
+            report = root / "Audit" / "missing-console.json"
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="compile_only",
+                out_report=str(report),
+                confirm=True,
+                change_reason="runtime audit",
+            )
+
+            published = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                (False, "VALIDATE_RUNTIME_RESULT", Severity.WARNING, True),
+                (
+                    response.success,
+                    response.code,
+                    response.severity,
+                    published["result"]["fail_fast_triggered"],
+                ),
+                msg=f"missing Console evidence was reported clean: {response.to_dict()!r}",
+            )
+            self.assertEqual(compile_section, published["compile"])
+            self.assertEqual(
+                {
+                    "authority": "unity_log",
+                    "available": False,
+                    "collection_code": "RUN_LOG_MISSING",
+                    "line_count": 0,
+                },
+                published["result"]["console_evidence"],
+            )
+            self.assertEqual(
+                [
+                    "inspect_world_canvas",
+                    "validate_runtime",
+                    "collect_unity_console",
+                ],
+                [step["step"] for step in published["result"]["steps"]],
+            )
+            self.assertNotIn(
+                "RUN_ASSERT_OK",
+                [step["result"]["code"] for step in published["result"]["steps"]],
+            )
+            runtime.classify_errors.assert_not_called()
+            runtime.assert_no_critical_errors.assert_not_called()
+            runtime.collect_unity_console.assert_called_once_with(
+                log_file=None,
+                since_timestamp=None,
+            )
+            runtime.collect_editor_console.assert_not_called()
+
+    def test_compile_only_existing_empty_log_is_observed_clean_evidence(self) -> None:
+        import json
+
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            compile_section = self._compile_section()
+            runtime.execute_write_profile.return_value.data["compile"] = compile_section
+            report = root / "Audit" / "empty-console.json"
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="compile_only",
+                out_report=str(report),
+                confirm=True,
+                change_reason="runtime audit",
+            )
+
+            published = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO, False),
+                (
+                    response.success,
+                    response.code,
+                    response.severity,
+                    published["result"]["fail_fast_triggered"],
+                ),
+            )
+            self.assertEqual(compile_section, published["compile"])
+            self.assertEqual(
+                {
+                    "authority": "unity_log",
+                    "available": True,
+                    "collection_code": "RUN_LOG_COLLECTED",
+                    "line_count": 0,
+                },
+                published["result"]["console_evidence"],
+            )
+            self.assertEqual(
+                [
+                    "RUN_VALIDATE_RUNTIME_OK",
+                    "RUN_LOG_COLLECTED",
+                    "RUN_CLASSIFY_OK",
+                    "RUN_ASSERT_OK",
+                ],
+                [
+                    step["result"]["code"]
+                    for step in published["result"]["steps"][1:]
+                ],
+            )
+            runtime.classify_errors.assert_called_once_with(
+                log_lines=[],
+                max_diagnostics=200,
+            )
+            runtime.collect_unity_console.assert_called_once_with(
+                log_file=None,
+                since_timestamp=None,
+            )
+            runtime.collect_editor_console.assert_not_called()
+
+    def test_compile_only_explicit_bridge_console_is_observed_clean_evidence(self) -> None:
+        import json
+
+        from prefab_sentinel.contracts import Severity
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            compile_section = self._compile_section()
+            runtime.execute_write_profile.return_value.data["compile"] = compile_section
+            report = root / "Audit" / "bridge-console.json"
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="compile_only",
+                console_authority="editor_bridge",
+                out_report=str(report),
+                confirm=True,
+                change_reason="runtime audit",
+            )
+
+            published = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                (True, "VALIDATE_RUNTIME_RESULT", Severity.INFO),
+                (response.success, response.code, response.severity),
+            )
+            self.assertEqual(compile_section, published["compile"])
+            self.assertEqual(
+                {
+                    "authority": "editor_bridge",
+                    "available": True,
+                    "collection_code": "RUN_EDITOR_CONSOLE_COLLECTED",
+                    "line_count": 0,
+                },
+                published["result"]["console_evidence"],
+            )
+            self.assertEqual(
+                [
+                    "inspect_world_canvas",
+                    "validate_runtime",
+                    "collect_editor_console",
+                    "classify_errors",
+                    "assert_no_critical_errors",
+                ],
+                [step["step"] for step in published["result"]["steps"]],
+            )
+            runtime.collect_editor_console.assert_called_once_with(
+                since_timestamp=None,
+                max_lines=200,
+            )
+            runtime.collect_unity_console.assert_not_called()
+
+    def test_terminal_publication_failure_discards_reservation(self) -> None:
+        from unittest.mock import patch
+
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            report = root / "Audit" / "publication-failure.json"
+
+            with patch(
+                "prefab_sentinel.services.runtime_validation.publish_runtime_report",
+                side_effect=OSError("filesystem detail"),
+            ):
+                response = validate_runtime(
+                    runtime,
+                    scene_path,
+                    profile="compile_only",
+                    out_report=str(report),
+                    confirm=True,
+                    change_reason="runtime audit",
+                )
+
+            self.assertEqual(
+                (False, "OUT_REPORT_WRITE_FAILED", "error"),
+                (response.success, response.code, response.severity.value),
+            )
+            self.assertFalse(report.exists())
+            self.assertEqual([], list(report.parent.iterdir()))
+
+    def test_editor_console_only_ignores_write_audit_and_report_reservation(self) -> None:
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root, scene_path = self._audited_project(temp_dir)
+            runtime = self._audited_runtime(root)
+            report = root / "Assets" / "must-not-be-reserved.json"
+
+            response = validate_runtime(
+                runtime,
+                scene_path,
+                profile="editor_console_only",
+                out_report=str(report),
+                confirm=False,
+                change_reason=None,
+                generated_asset_policy="not-applicable",
+            )
+
+            self.assertEqual((True, "VALIDATE_RUNTIME_RESULT"), (response.success, response.code))
+            self.assertFalse(report.exists())
+            runtime.execute_write_profile.assert_not_called()
+            runtime.collect_editor_console.assert_called_once_with(
+                since_timestamp=None,
+                max_lines=200,
+            )
+            runtime.collect_unity_console.assert_not_called()
 
 
 class TestValidationSnapshotPinning:
@@ -1386,73 +2371,21 @@ class TestValidationSnapshotPinning:
             regenerate=regenerate_snapshots,
         )
 
-    def test_validate_runtime_skipped_compile_snapshot(
-        self, regenerate_snapshots: bool
-    ) -> None:
-        """A representative runtime-validation snapshot anchored on the
-        no-bridge-watch-dir config-error path; pins the success / severity /
-        code / canvas-step shape that the orchestrator returns when the
-        Editor Bridge watch directory is not configured.
-
-        Post-issue #270 (batchmode dispatch removal): an unset
-        ``UNITYTOOL_BRIDGE_WATCH_DIR`` short-circuits both
-        ``compile_udonsharp`` and ``run_clientsim`` with
-        ``RUN_CONFIG_ERROR``; the orchestrator then trips fail-fast and
-        the post-step cascade (collect_unity_console / classify_errors /
-        assert_no_critical_errors) does not run. The fixture filename
-        retains the legacy ``_skip`` suffix because the test entry-point
-        (env-stripped) is still the "skip path" caller; only the
-        observed step codes flipped.
-        """
-        import os  # noqa: PLC0415
-        from unittest.mock import patch  # noqa: PLC0415
-
-        from prefab_sentinel.orchestrator_validation import validate_runtime  # noqa: PLC0415
-        from prefab_sentinel.services.runtime_validation import (  # noqa: PLC0415
-            RuntimeValidationService,
-        )
+    def test_validate_runtime_required_profile_snapshot(self) -> None:
+        from prefab_sentinel.orchestrator_validation import validate_runtime
+        from prefab_sentinel.services.runtime_validation import RuntimeValidationService
+        from tests._assertion_helpers import assert_error_envelope
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            scene = root / "Assets" / "Smoke.unity"
-            scene.parent.mkdir(parents=True, exist_ok=True)
-            scene.write_text(
-                "%YAML 1.1\n--- !u!1 &1\nGameObject:\n  m_Name: Smoke\n",
-                encoding="utf-8",
-            )
-            svc = RuntimeValidationService(project_root=root)
+            service = RuntimeValidationService(project_root=Path(temp_dir))
+            response = validate_runtime(service, "Assets/Smoke.unity")
 
-            unitytool_keys = [
-                key for key in os.environ if key.startswith("UNITYTOOL_")
-            ]
-            with patch.dict(os.environ, {}, clear=False):
-                for key in unitytool_keys:
-                    os.environ.pop(key, None)
-                response = validate_runtime(svc, str(scene))
-
-        # Project the response onto a stable snapshot for runtime-validation:
-        # success / severity / code / per-category quality-gate keys.
-        steps_summary = [
-            {"step": entry["step"], "code": entry["result"]["code"]}
-            for entry in response.data["steps"]
-        ]
-        snapshot = {
-            "success": response.success,
-            "severity": response.severity.value,
-            "code": response.code,
-            "should_proceed": response.success,
-            "fail_fast_triggered": response.data["fail_fast_triggered"],
-            "categories": {
-                "broken_pptr": 0,
-                "udon_runtime": 0,
-                "variant_override": 0,
-            },
-            "steps_summary": steps_summary,
-        }
-        _assert_snapshot(
-            "validate_runtime_skip.json",
-            snapshot,
-            regenerate=regenerate_snapshots,
+        assert_error_envelope(
+            response,
+            code="RUN_PROFILE_REQUIRED",
+            severity="error",
+            field="profile",
+            message_match=r"^profile is required\.$",
         )
 
 

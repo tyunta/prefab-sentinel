@@ -30,9 +30,7 @@ MODEL_FILE_SUFFIXES: frozenset[str] = frozenset({".fbx", ".blend", ".gltf", ".gl
 
 GUID_PATTERN = re.compile(r"\bguid:\s*([0-9a-fA-F]{32})\b")
 LOCAL_FILE_ID_PATTERN = re.compile(r"^--- !u!\d+ &(-?\d+)", re.MULTILINE)
-REFERENCE_PATTERN = re.compile(
-    r"\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?(?:,\s*type:\s*(-?\d+))?\}"
-)
+REFERENCE_PATTERN = re.compile(r"\{fileID:\s*(-?\d+)(?:,\s*guid:\s*([0-9a-fA-F]{32}))?(?:,\s*type:\s*(-?\d+))?\}")
 SOURCE_PREFAB_PATTERN = re.compile(
     r"m_(?:SourcePrefab|ParentPrefab):\s*\{fileID:\s*(-?\d+),\s*guid:\s*([0-9a-fA-F]{32}),\s*type:\s*(-?\d+)\}"
 )
@@ -180,10 +178,13 @@ def _indexed_asset_path(meta_path: Path, project_root: Path) -> Path | None:
     try:
         if meta_path.is_symlink() or asset_path.is_symlink():
             return None
-        asset_path.resolve().relative_to(project_root.resolve())
+        # collect_project_guid_index passes its canonical root through both scans.
+        # Each asset still needs resolution to reject parent-link escapes.
+        asset_path.resolve().relative_to(project_root)
     except (OSError, ValueError):
         return None
     return asset_path
+
 
 def _scan_meta_files(
     scan_root: Path,
@@ -191,24 +192,25 @@ def _scan_meta_files(
     index: dict[str, Path],
     project_root: Path,
 ) -> None:
-    meta_paths: list[tuple[Path, Path]] = []
+    meta_paths: list[Path] = []
     for root, dirnames, filenames in os.walk(scan_root):
-        dirnames[:] = sorted(
-            dirname for dirname in dirnames if dirname.lower() not in excluded
-        )
+        dirnames[:] = sorted(dirname for dirname in dirnames if dirname.lower() not in excluded)
         for filename in sorted(filenames):
             if not filename.lower().endswith(".meta"):
                 continue
-            meta_path = Path(root) / filename
-            asset_path = _indexed_asset_path(meta_path, project_root)
-            if asset_path is not None:
-                meta_paths.append((meta_path, asset_path))
+            meta_paths.append(Path(root) / filename)
 
-    def extract_indexed_guid(item: tuple[Path, Path]) -> tuple[str | None, Path]:
-        meta_path, asset_path = item
+    def extract_indexed_guid(meta_path: Path) -> tuple[str | None, Path] | None:
+        # Independent path checks and GUID reads share the existing ordered worker.
+        asset_path = _indexed_asset_path(meta_path, project_root)
+        if asset_path is None:
+            return None
         return _extract_guid_safe(meta_path), asset_path
 
-    for guid, asset_path in run_ordered(meta_paths, extract_indexed_guid):
+    for result in run_ordered(meta_paths, extract_indexed_guid):
+        if result is None:
+            continue
+        guid, asset_path = result
         if guid:
             index[guid] = asset_path
 
@@ -220,9 +222,7 @@ def collect_project_guid_index(
     include_package_cache: bool = True,
 ) -> dict[str, Path]:
     resolved_root = project_root.resolve()
-    excluded = {
-        name.lower() for name in (excluded_dir_names or DEFAULT_EXCLUDED_DIR_NAMES)
-    }
+    excluded = {name.lower() for name in (excluded_dir_names or DEFAULT_EXCLUDED_DIR_NAMES)}
     index: dict[str, Path] = {}
     _scan_meta_files(resolved_root, excluded, index, resolved_root)
 

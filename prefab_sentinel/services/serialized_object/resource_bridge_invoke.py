@@ -8,6 +8,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from prefab_sentinel.bridge_constants import PROTOCOL_VERSION
+from prefab_sentinel.bridge_response import is_bridge_response_envelope
 from prefab_sentinel.contracts import Severity, ToolResponse, error_response
 from prefab_sentinel.json_io import dump_json, load_json
 from prefab_sentinel.patch_plan import (
@@ -109,7 +111,7 @@ def _validate_bridge_response(
         return _bridge_protocol_error(ops)
 
     protocol_version = payload["protocol_version"]
-    if type(protocol_version) is not int or protocol_version != PLAN_VERSION:
+    if type(protocol_version) is not int or protocol_version != PROTOCOL_VERSION:
         return error_response(
             "SER_BRIDGE_PROTOCOL_VERSION",
             "Unity bridge protocol version mismatch.",
@@ -117,16 +119,12 @@ def _validate_bridge_response(
         )
     if set(payload) != _BRIDGE_RESPONSE_FIELDS:
         return _bridge_protocol_error(ops)
-    if type(success := payload["success"]) is not bool:
-        return _bridge_protocol_error(ops)
-    severity = payload["severity"]
-    if not isinstance(severity, str) or severity not in {item.value for item in Severity}:
-        return _bridge_protocol_error(ops)
-    if not isinstance(code := payload["code"], str) or not code.strip():
-        return _bridge_protocol_error(ops)
-    if not isinstance(payload["message"], str):
+    if not is_bridge_response_envelope(payload):
         return _bridge_protocol_error(ops)
 
+    success = payload["success"]
+    severity = payload["severity"]
+    code = payload["code"]
     data = payload["data"]
     expected_created_handles: set[str] | None = None
     if success and resource_kind == "prefab" and resource_mode == "open":

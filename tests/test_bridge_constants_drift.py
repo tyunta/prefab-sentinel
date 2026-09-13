@@ -8,6 +8,7 @@ without touching the live repository files.
 from __future__ import annotations
 
 import unittest
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -24,9 +25,14 @@ pytestmark = pytest.mark.source_text_invariant
 
 def _fake_cs(
     bridge_version: str = "0.5.150",
-    protocol_version: int = 1,
+    protocol_version: int = 2,
     severities: frozenset[str] | None = None,
     console_capacity: int = 1000,
+    marker_filename: str = ".prefab-sentinel-watch-identity",
+    status_relative_path: str = "Library/PrefabSentinel/bridge-status-v1.json",
+    status_schema_version: int = 1,
+    status_max_bytes: int = 4096,
+    heartbeat_interval_ms: int = 1000,
 ) -> dict[str, object]:
     return {
         "bridge_version": bridge_version,
@@ -37,6 +43,11 @@ def _fake_cs(
             "error",
         },
         "console_capacity": console_capacity,
+        "marker_filename": marker_filename,
+        "status_relative_path": status_relative_path,
+        "status_schema_version": status_schema_version,
+        "status_max_bytes": status_max_bytes,
+        "heartbeat_interval_ms": heartbeat_interval_ms,
     }
 
 
@@ -56,6 +67,66 @@ class BridgeConstantsConsoleCapacityDriftTests(unittest.TestCase):
              ):
             exit_code = checker.main()
         self.assertEqual(1, exit_code)
+
+
+class BridgeWatchIdentityConstantsDriftTests(unittest.TestCase):
+    def _run_with(self, **overrides: Any) -> int:
+        with (
+            patch.object(
+                checker,
+                "_load_pyproject_version",
+                return_value="0.5.150",
+            ),
+            patch.object(
+                checker,
+                "_load_plugin_version",
+                return_value="0.5.150",
+            ),
+            patch.object(
+                checker,
+                "_load_csharp_constants",
+                return_value=_fake_cs(**overrides),
+            ),
+        ):
+            return checker.main()
+
+    def test_marker_filename_mismatch_reported(self) -> None:
+        self.assertEqual(
+            1,
+            self._run_with(marker_filename=".wrong-watch-identity"),
+        )
+
+    def test_status_relative_path_mismatch_reported(self) -> None:
+        self.assertEqual(
+            1,
+            self._run_with(status_relative_path="Library/wrong.json"),
+        )
+
+    def test_status_schema_version_mismatch_reported(self) -> None:
+        self.assertEqual(
+            1,
+            self._run_with(status_schema_version=2),
+        )
+
+    def test_status_max_bytes_mismatch_reported(self) -> None:
+        self.assertEqual(
+            1,
+            self._run_with(status_max_bytes=4095),
+        )
+
+    def test_csharp_heartbeat_interval_mismatch_reported(self) -> None:
+        self.assertEqual(
+            1,
+            self._run_with(heartbeat_interval_ms=999),
+        )
+
+    def test_python_freshness_ceiling_mismatch_reported(self) -> None:
+        with patch(
+            "prefab_sentinel.bridge_watch_identity."
+            "BRIDGE_STATUS_FRESHNESS_MS",
+            4999,
+        ):
+            self.assertEqual(1, self._run_with())
 
 
 class BridgeConstantsDriftTests(unittest.TestCase):
@@ -118,7 +189,7 @@ class BridgeConstantsDriftTests(unittest.TestCase):
                  "_load_csharp_constants",
                  return_value=_fake_cs(
                      bridge_version="0.5.150",
-                     protocol_version=1,
+                     protocol_version=2,
                      severities=frozenset({"info", "warning", "error"}),
                  ),
              ):

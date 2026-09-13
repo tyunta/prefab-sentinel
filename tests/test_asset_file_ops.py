@@ -20,6 +20,7 @@ a vague envelope-content failure instead of a localised one.
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -34,6 +35,9 @@ from prefab_sentinel.asset_file_ops import (
 )
 from prefab_sentinel.material_asset_inspector import inspect_material_asset
 from prefab_sentinel.unity_assets import decode_text_file
+from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
+from prefab_sentinel.yaml_field_extraction import extract_block_fields
+from tests._assertion_helpers import assert_error_envelope
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "mat"
 
@@ -233,6 +237,368 @@ class CopyAssetApplyTests(unittest.TestCase):
         # Documented absence: the m_name_unchanged flag is not set when
         # the rename actually changed the name.
         self.assertNotIn("m_name_unchanged", result["data"])
+
+
+class CopyControllerMainObjectTests(unittest.TestCase):
+    """A Controller copy must rename the main object, not a preceding State."""
+
+    _PREFIX = "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n"
+    _MAIN = (
+        "--- !u!91 &9154321\n"
+        "AnimatorController:\n"
+        "  m_AnimatorLayers:\n"
+        "  - m_Name: LayerName\n"
+        "    m_StateMachine: {fileID: 1107001}\n"
+        "  m_Name: MainController\n"
+    )
+    _COPIED_MAIN = (
+        "--- !u!91 &9154321\n"
+        "AnimatorController:\n"
+        "  m_AnimatorLayers:\n"
+        "  - m_Name: LayerName\n"
+        "    m_StateMachine: {fileID: 1107001}\n"
+        '  m_Name: "CopiedController"\n'
+    )
+    _STATE = (
+        "--- !u!1102 &1102001\n"
+        "AnimatorState:\n"
+        "  m_Name: MainController\n"
+        "  m_Transitions:\n"
+        "  - {fileID: 1101001}\n"
+        "  m_Motion: {fileID: 7400000, guid: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, type: 2}\n"
+        "--- !u!1101 &1101001\n"
+        "AnimatorStateTransition:\n"
+        "  m_Name: TransitionName\n"
+        "  m_DstState: {fileID: 1102001}\n"
+        "--- !u!1107 &1107001\n"
+        "AnimatorStateMachine:\n"
+        "  m_Name: StateMachineName\n"
+        "  m_ChildStates:\n"
+        "  - m_State: {fileID: 1102001}\n"
+    )
+
+    def test_copy_changes_only_main_name_in_either_document_order(self) -> None:
+        for main_first in (False, True):
+            for dry_run in (True, False):
+                with self.subTest(main_first=main_first, dry_run=dry_run):
+                    source_text = self._PREFIX + (
+                        self._MAIN + self._STATE if main_first else self._STATE + self._MAIN
+                    )
+                    expected_text = self._PREFIX + (
+                        self._COPIED_MAIN + self._STATE
+                        if main_first else self._STATE + self._COPIED_MAIN
+                    )
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        root = Path(tmpdir)
+                        src = root / "Original.controller"
+                        src.write_text(source_text, encoding="utf-8")
+                        src_meta = root / "Original.controller.meta"
+                        src_meta.write_text(_DUMMY_META, encoding="utf-8")
+                        unrelated = root / "Other.asset"
+                        unrelated.write_text("unrelated disk state", encoding="utf-8")
+                        dest = root / "CopiedController.controller"
+                        result = copy_asset(str(src), str(dest), dry_run=dry_run)
+                        self.assertEqual(
+                            (source_text, _DUMMY_META, "unrelated disk state"),
+                            (src.read_text(), src_meta.read_text(), unrelated.read_text()),
+                            "Copying must preserve source, metadata, and unrelated assets",
+                        )
+                        self.assertEqual(
+                            (not dry_run, not dry_run),
+                            (dest.exists(), Path(str(dest) + ".meta").exists()),
+                            "Only confirmed copies create destination files",
+                        )
+                        if not dry_run:
+                            self.assertEqual(expected_text, dest.read_text(), "Only main m_Name changes")
+                    self.assertEqual(
+                        (True, "ASSET_COPY_DRY_RUN" if dry_run else "ASSET_COPY_APPLIED"),
+                        (result["success"], result["code"]),
+                    )
+                    self.assertEqual(
+                        ("MainController", "CopiedController", {
+                            "class_id": "91", "file_id": "9154321",
+                            "type_name": "AnimatorController", "property_path": "m_Name",
+                        }),
+                        (result["data"]["m_name_before"], result["data"]["m_name_after"],
+                         result["data"].get("m_name_target")),
+                        "Preview and apply must identify the same main object",
+                    )
+
+    def test_destination_stem_is_written_as_a_string_scalar(self) -> None:
+        source_text = self._PREFIX + self._STATE + self._MAIN
+        for stem, expected_scalar in (
+            ("Copy # Tail", '"Copy # Tail"'),
+            ("# Hidden", '"# Hidden"'),
+            ("true", '"true"'),
+            ("日本語 #1", '"日本語 #1"'),
+        ):
+            with self.subTest(stem=stem):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    assets = root / "Assets"
+                    assets.mkdir()
+                    src = assets / "Original.controller"
+                    src.write_text(source_text, encoding="utf-8")
+                    dest = assets / f"{stem}.controller"
+                    preview = copy_asset(
+                        "Assets/Original.controller", f"Assets/{stem}.controller",
+                        project_root=root, dry_run=True,
+                    )
+                    self.assertEqual(
+                        (True, "ASSET_COPY_DRY_RUN", False),
+                        (preview["success"], preview["code"], dest.exists()),
+                        "The destination filename is accepted without a write",
+                    )
+                    result = copy_asset(
+                        "Assets/Original.controller", f"Assets/{stem}.controller",
+                        project_root=root, dry_run=False,
+                    )
+                    observed_text = dest.read_text(encoding="utf-8")
+                    self.assertEqual(source_text, src.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    (True, "ASSET_COPY_APPLIED", stem),
+                    (result["success"], result["code"], result["data"]["m_name_after"]),
+                )
+                main = next(block for block in split_yaml_blocks(observed_text) if block.class_id == "91")
+                scalar = dict(extract_block_fields(main.text))["m_Name"]
+                self.assertEqual(expected_scalar, scalar, "The name must remain a quoted string")
+                # JSON double-quoted strings are YAML 1.1 scalars; decoding proves
+                # that '#' and implicit YAML booleans are string content.
+                self.assertEqual(stem, json.loads(scalar), "Stored scalar must equal the requested name")
+                expected_main = self._MAIN.replace(
+                    "  m_Name: MainController\n", f"  m_Name: {expected_scalar}\n",
+                )
+                self.assertEqual(
+                    self._PREFIX + self._STATE + expected_main, observed_text,
+                    "Only the main name scalar may change",
+                )
+
+    def test_quoted_matching_name_preserves_all_controller_text(self) -> None:
+        for stem, scalar in (
+            ("Copy # Tail", '"Copy # Tail"'),
+        ):
+            source_text = self._PREFIX + self._STATE + self._MAIN.replace(
+                "  m_Name: MainController\n", f"  m_Name: {scalar}\n",
+            )
+            for dry_run in (True, False):
+                with self.subTest(stem=stem, scalar=scalar, dry_run=dry_run):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        root = Path(tmpdir)
+                        src = root / "Original.controller"
+                        src.write_text(source_text, encoding="utf-8")
+                        dest = root / f"{stem}.controller"
+                        result = copy_asset(str(src), str(dest), dry_run=dry_run)
+                        self.assertEqual(
+                            (scalar, stem, True),
+                            (result["data"]["m_name_before"], result["data"]["m_name_after"],
+                             result["data"].get("m_name_unchanged")),
+                            "A canonical quoted no-op keeps both source scalar and bytes",
+                        )
+                        if not dry_run:
+                            self.assertEqual(source_text, dest.read_text(encoding="utf-8"))
+
+    def test_quoted_source_names_remain_accepted_without_general_yaml_decoding(self) -> None:
+        for scalar, stem, expected_scalar in (
+            ("'Copy''s Tail'", "Copy's Tail", '"Copy\'s Tail"'),
+            ('"Copy \\x23 Tail"', "Copy # Tail", '"Copy # Tail"'),
+            ('"Copy \\u0023 Tail"', "Copy # Tail", '"Copy # Tail"'),
+        ):
+            with self.subTest(scalar=scalar):
+                source_text = self._PREFIX + self._STATE + self._MAIN.replace(
+                    "  m_Name: MainController\n", f"  m_Name: {scalar}\n",
+                )
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    src = root / "Original.controller"
+                    src.write_text(source_text, encoding="utf-8")
+                    dest = root / f"{stem}.controller"
+                    result = copy_asset(str(src), str(dest), dry_run=False)
+                    self.assertEqual(
+                        (True, "ASSET_COPY_APPLIED"), (result["success"], result["code"]),
+                        "Valid YAML quoted names must not require JSON source syntax",
+                    )
+                    self.assertEqual(source_text, src.read_text(encoding="utf-8"))
+                    expected_main = self._MAIN.replace(
+                        "  m_Name: MainController\n", f"  m_Name: {expected_scalar}\n",
+                    )
+                    self.assertEqual(self._PREFIX + self._STATE + expected_main, dest.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    (scalar, stem), (result["data"]["m_name_before"], result["data"]["m_name_after"]),
+                    "Before remains the opaque source scalar; after is the requested name",
+                )
+                self.assertNotIn("m_name_unchanged", result["data"], "Normalization does not claim semantic no-op")
+
+    def test_matching_main_name_preserves_all_controller_text(self) -> None:
+        source_text = self._PREFIX + self._STATE + self._MAIN
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "Original.controller"
+            src.write_text(source_text, encoding="utf-8")
+            dest = root / "MainController.controller"
+            result = copy_asset(str(src), str(dest), dry_run=False)
+            self.assertEqual(source_text, dest.read_text(), "A main-name no-op preserves every document")
+        self.assertEqual(
+            (True, "ASSET_COPY_APPLIED", True),
+            (result["success"], result["code"], result["data"].get("m_name_unchanged")),
+        )
+
+    def test_unreliable_controller_target_fails_before_any_copy_write(self) -> None:
+        invalid_sources = (
+            (self._STATE, "main_object_not_unique", 0),
+            (self._MAIN + self._MAIN.replace("9154321", "9154322"), "main_object_not_unique", 2),
+            (self._MAIN.replace("&9154321", "&9154321 stripped"), "main_object_not_unique", 0),
+            (self._MAIN.replace("AnimatorController:", "AnimatorState:"), "main_object_identity_invalid", 1),
+            (self._MAIN + self._STATE.replace("&1102001", "&9154321"), "main_object_identity_invalid", 1),
+            (self._MAIN.replace("  m_Name: MainController\n", ""), "root_name_invalid", 1),
+            (self._MAIN + "  m_Name: Duplicate\n", "root_name_invalid", 1),
+            (self._MAIN.replace("MainController\n", "|\n    Multiline\n"), "root_name_invalid", 1),
+            (self._MAIN.replace("MainController\n", "\n"), "root_name_invalid", 1),
+            (self._MAIN.replace("MainController\n", "'Unclosed\n"), "root_name_invalid", 1),
+            (self._MAIN + "    continued name\n", "root_name_invalid", 1),
+        )
+        for body, reason, count in invalid_sources:
+            for dry_run in (True, False):
+                with self.subTest(reason=reason, count=count, body=body, dry_run=dry_run):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        root = Path(tmpdir)
+                        src = root / "Original.controller"
+                        source_text = self._PREFIX + body
+                        src.write_text(source_text, encoding="utf-8")
+                        dest = root / "CopiedController.controller"
+                        result = copy_asset(str(src), str(dest), dry_run=dry_run)
+                        self.assertEqual(
+                            (["Original.controller"], source_text),
+                            (sorted(path.name for path in root.iterdir()), src.read_text()),
+                            "Invalid main identity/name must leave no destination or staging artifacts",
+                        )
+                    assert_error_envelope(
+                        result, code="ASSET_COPY_MAIN_OBJECT_INVALID", field="source_path",
+                        message_match="Controller main object",
+                        data={"field": "source_path", "reason": reason, "matching_document_count": count},
+                    )
+
+
+class ControllerScalarBoundaryTests(unittest.TestCase):
+    """Root-looking text inside a different scalar is not a writable field."""
+
+    _FIELDS = (
+        "  m_UserData:\n  - [\"first: text\n  m_Name: Decoy\n  last\"]\n",
+        "  m_UserData:\n  - {\"text: key\": \"first\n  m_Name: Decoy\n  last\"}\n",
+        "  m_UserData:\n  - \"first: text\n  m_Name: Decoy\n  last\"\n",
+        "  m_UserData:\n  - 'first ''quoted'': text\n  m_Name: Decoy\n  last'\n",
+        "  m_UserData:\n  - \"first \\\"quoted\\\": text\n  m_Name: Decoy\n  last\"\n",
+        '  m_UserData: "first\n  m_Name: Decoy\n  last"\n',
+        '  m_UserData: "first \\"quoted\\"\n  m_Name: Decoy\n  last"\n',
+        "  m_UserData: 'first ''quoted''\n  m_Name: Decoy\n  last'\n",
+        '  m_UserData: {text: "first\n  m_Name: Decoy\n  last"}\n',
+        '  m_UserData: ["first\n  m_Name: Decoy\n  last"]\n',
+        '  m_UserData:\n  - "first\n  m_Name: Decoy\n  last"\n',
+    )
+
+    def test_decoy_name_inside_other_scalar_is_rejected_without_writes(self) -> None:
+        for field in self._FIELDS:
+            for operation in (copy_asset, rename_asset):
+                for dry_run in (True, False):
+                    with self.subTest(field=field, operation=operation.__name__, dry_run=dry_run):
+                        source_text = (
+                            CopyControllerMainObjectTests._PREFIX
+                            + "--- !u!91 &9154321\nAnimatorController:\n"
+                            + field + "  m_AnimatorLayers: []\n"
+                        )
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            root = Path(tmpdir)
+                            src = root / "Original.controller"
+                            src.write_text(source_text, encoding="utf-8")
+                            meta = root / "Original.controller.meta"
+                            meta.write_text(_DUMMY_META, encoding="utf-8")
+                            if operation is copy_asset:
+                                result = operation(str(src), str(root / "Updated.controller"), dry_run=dry_run)
+                                code, input_field = "ASSET_COPY_MAIN_OBJECT_INVALID", "source_path"
+                            else:
+                                result = operation(str(src), "Updated.controller", dry_run=dry_run)
+                                code, input_field = "ASSET_RENAME_MAIN_OBJECT_INVALID", "asset_path"
+                            assert_error_envelope(
+                                result, code=code, field=input_field, message_match="Controller main object",
+                                data={"field": input_field, "reason": "root_name_invalid", "matching_document_count": 1},
+                            )
+                            self.assertEqual(
+                                (["Original.controller", "Original.controller.meta"], source_text.encode(), _DUMMY_META.encode()),
+                                (sorted(path.name for path in root.iterdir()), src.read_bytes(), meta.read_bytes()),
+                                "Missing real root name must reject before staging, copying, or moving",
+                            )
+
+    def test_actual_root_after_other_multiline_scalar_is_the_only_changed_span(self) -> None:
+        fields = (
+            *self._FIELDS,
+            '  m_UserData: first "plain quote\n    and don\'t close it\n',
+            '  m_UserData: first\n    - "quoted-looking plain continuation\n',
+        )
+        for field in fields:
+            for operation in (copy_asset, rename_asset):
+                for dry_run in (True, False):
+                    with self.subTest(field=field, operation=operation.__name__, dry_run=dry_run):
+                        prefix = (
+                            CopyControllerMainObjectTests._PREFIX
+                            + "--- !u!91 &9154321\nAnimatorController:\n"
+                            + field + "  m_AnimatorLayers: []\n"
+                        )
+                        source_text = prefix + "  m_Name: ActualController\n"
+                        expected_text = prefix + '  m_Name: "Updated"\n'
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            root = Path(tmpdir)
+                            src = root / "Original.controller"
+                            src.write_text(source_text, encoding="utf-8")
+                            meta = root / "Original.controller.meta"
+                            meta.write_text(_DUMMY_META, encoding="utf-8")
+                            dest = root / "Updated.controller"
+                            if operation is copy_asset:
+                                result = operation(str(src), str(dest), dry_run=dry_run)
+                                expected_code = "ASSET_COPY_DRY_RUN" if dry_run else "ASSET_COPY_APPLIED"
+                            else:
+                                result = operation(str(src), dest.name, dry_run=dry_run)
+                                expected_code = "ASSET_RENAME_DRY_RUN" if dry_run else "ASSET_RENAME_APPLIED"
+                            self.assertEqual((True, expected_code), (result["success"], result["code"]))
+                            self.assertEqual(
+                                ("ActualController", "Updated", "9154321"),
+                                (result["data"]["m_name_before"], result["data"]["m_name_after"],
+                                 result["data"]["m_name_target"]["file_id"]),
+                            )
+                            if dry_run:
+                                self.assertEqual((False, source_text.encode(), _DUMMY_META.encode()),
+                                                 (dest.exists(), src.read_bytes(), meta.read_bytes()))
+                            else:
+                                self.assertEqual(expected_text.encode(), dest.read_bytes(), "Preserve all other scalar bytes")
+
+    def test_multiline_root_name_is_rejected_even_with_an_escaped_quote_at_line_end(self) -> None:
+        for scalar in ('"first \\"\n  last"', "'first ''\n  last'"):
+            for operation in (copy_asset, rename_asset):
+                for dry_run in (True, False):
+                    with self.subTest(scalar=scalar, operation=operation.__name__, dry_run=dry_run):
+                        source_text = (
+                            CopyControllerMainObjectTests._PREFIX
+                            + "--- !u!91 &9154321\nAnimatorController:\n"
+                            + f"  m_Name: {scalar}\n  m_AnimatorLayers: []\n"
+                        )
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            root = Path(tmpdir)
+                            src = root / "Original.controller"
+                            src.write_text(source_text, encoding="utf-8")
+                            meta = root / "Original.controller.meta"
+                            meta.write_text(_DUMMY_META, encoding="utf-8")
+                            if operation is copy_asset:
+                                result = operation(str(src), str(root / "Updated.controller"), dry_run=dry_run)
+                                code, field = "ASSET_COPY_MAIN_OBJECT_INVALID", "source_path"
+                            else:
+                                result = operation(str(src), "Updated.controller", dry_run=dry_run)
+                                code, field = "ASSET_RENAME_MAIN_OBJECT_INVALID", "asset_path"
+                            assert_error_envelope(
+                                result, code=code, field=field, message_match="Controller main object",
+                                data={"field": field, "reason": "root_name_invalid", "matching_document_count": 1},
+                            )
+                            self.assertEqual(
+                                (["Original.controller", "Original.controller.meta"], source_text.encode(), _DUMMY_META.encode()),
+                                (sorted(path.name for path in root.iterdir()), src.read_bytes(), meta.read_bytes()),
+                            )
 
 
 class CopyAssetProjectRootPathTests(unittest.TestCase):
@@ -824,6 +1190,168 @@ class RenameAssetApplyTests(unittest.TestCase):
         self.assertIn("  m_Name: renamed", text)
         # Documented absence: m_name_unchanged is not set on a real rename.
         self.assertNotIn("m_name_unchanged", result["data"])
+
+
+class RenameControllerMainObjectTests(unittest.TestCase):
+    """Issue #239 uses the same document fixtures with rename's metadata lifecycle."""
+
+    def test_rename_changes_only_main_name_in_either_document_order(self) -> None:
+        fixture = CopyControllerMainObjectTests
+        expected_main = fixture._MAIN.replace(
+            "  m_Name: MainController\n", '  m_Name: "RenamedController"\n',
+        )
+        for main_first in (False, True):
+            for dry_run in (True, False):
+                with self.subTest(main_first=main_first, dry_run=dry_run):
+                    source_text = fixture._PREFIX + (
+                        fixture._MAIN + fixture._STATE if main_first else fixture._STATE + fixture._MAIN
+                    )
+                    expected_text = fixture._PREFIX + (
+                        expected_main + fixture._STATE if main_first else fixture._STATE + expected_main
+                    )
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        root = Path(tmpdir)
+                        assets = root / "Assets"
+                        assets.mkdir()
+                        src = assets / "Original.controller"
+                        src.write_text(source_text, encoding="utf-8")
+                        src_meta = assets / "Original.controller.meta"
+                        src_meta.write_text(_DUMMY_META, encoding="utf-8")
+                        other = assets / "Other.asset"
+                        other.write_bytes(b"unrelated asset bytes")
+                        dest = assets / "RenamedController.controller"
+                        dest_meta = assets / "RenamedController.controller.meta"
+                        result = rename_asset(
+                            "Assets/Original.controller", "RenamedController.controller",
+                            project_root=root, dry_run=dry_run,
+                        )
+                        self.assertEqual(
+                            (True, "ASSET_RENAME_DRY_RUN" if dry_run else "ASSET_RENAME_APPLIED"),
+                            (result["success"], result["code"]),
+                        )
+                        self.assertEqual(
+                            (dry_run, dry_run, not dry_run, not dry_run),
+                            (src.exists(), src_meta.exists(), dest.exists(), dest_meta.exists()),
+                            "Preview keeps original paths; apply moves both asset and metadata",
+                        )
+                        self.assertEqual(
+                            (source_text if dry_run else expected_text).encode(),
+                            (src if dry_run else dest).read_bytes(),
+                            "Rename may change only the main Controller name scalar",
+                        )
+                        self.assertEqual(_DUMMY_META.encode(), (src_meta if dry_run else dest_meta).read_bytes())
+                        self.assertEqual(b"unrelated asset bytes", other.read_bytes())
+                    self.assertEqual(
+                        ("MainController", "RenamedController", {
+                            "class_id": "91", "file_id": "9154321",
+                            "type_name": "AnimatorController", "property_path": "m_Name",
+                        }),
+                        (result["data"]["m_name_before"], result["data"]["m_name_after"],
+                         result["data"].get("m_name_target")),
+                    )
+                    if not dry_run:
+                        self.assertEqual(True, result["data"]["meta_renamed"])
+
+    def test_unreliable_controller_target_fails_before_staging_or_moving(self) -> None:
+        fixture = CopyControllerMainObjectTests
+        for body, reason, count in (
+            (fixture._STATE, "main_object_not_unique", 0),
+            (fixture._MAIN + fixture._MAIN.replace("9154321", "9154322"), "main_object_not_unique", 2),
+            (fixture._MAIN.replace("&9154321", "&9154321 stripped"), "main_object_not_unique", 0),
+            (fixture._MAIN.replace("AnimatorController:", "AnimatorState:"), "main_object_identity_invalid", 1),
+            (fixture._MAIN + fixture._STATE.replace("&1102001", "&9154321"), "main_object_identity_invalid", 1),
+            (fixture._MAIN.replace("  m_Name: MainController\n", ""), "root_name_invalid", 1),
+            (fixture._MAIN + "  m_Name: Duplicate\n", "root_name_invalid", 1),
+            (fixture._MAIN.replace("MainController\n", "|\n    Multiline\n"), "root_name_invalid", 1),
+        ):
+            for dry_run in (True, False):
+                with self.subTest(reason=reason, count=count, body=body, dry_run=dry_run):
+                    source_text = fixture._PREFIX + body
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        root = Path(tmpdir)
+                        src = root / "Original.controller"
+                        src.write_text(source_text, encoding="utf-8")
+                        src_meta = root / "Original.controller.meta"
+                        src_meta.write_text(_DUMMY_META, encoding="utf-8")
+                        result = rename_asset(str(src), "RenamedController.controller", dry_run=dry_run)
+                        assert_error_envelope(
+                            result, code="ASSET_RENAME_MAIN_OBJECT_INVALID", field="asset_path",
+                            message_match="Controller main object",
+                            data={"field": "asset_path", "reason": reason, "matching_document_count": count},
+                        )
+                        self.assertEqual(
+                            (["Original.controller", "Original.controller.meta"],
+                             source_text.encode(), _DUMMY_META.encode()),
+                            (sorted(path.name for path in root.iterdir()), src.read_bytes(), src_meta.read_bytes()),
+                            "Invalid Controller selection leaves source, metadata, and directory entries unchanged",
+                        )
+
+    def test_controller_name_encoding_and_no_op_preserve_metadata(self) -> None:
+        fixture = CopyControllerMainObjectTests
+        for source_scalar, stem, expected_scalar, unchanged in (
+            ("MainController", "Copy # Tail", '"Copy # Tail"', False),
+            ("MainController", "# Hidden", '"# Hidden"', False),
+            ("MainController", "true", '"true"', False),
+            ("MainController", "日本語 #1", '"日本語 #1"', False),
+            ("MainController", "MainController", "MainController", True),
+            ('"Copy # Tail"', "Copy # Tail", '"Copy # Tail"', True),
+            ("'Copy''s Tail'", "Copy's Tail", '"Copy\'s Tail"', False),
+            ('"Copy \\x23 Tail"', "Copy # Tail", '"Copy # Tail"', False),
+        ):
+            with self.subTest(source_scalar=source_scalar, stem=stem):
+                source_text = fixture._PREFIX + fixture._STATE + fixture._MAIN.replace(
+                    "  m_Name: MainController\n", f"  m_Name: {source_scalar}\n",
+                )
+                expected_text = fixture._PREFIX + fixture._STATE + fixture._MAIN.replace(
+                    "  m_Name: MainController\n", f"  m_Name: {expected_scalar}\n",
+                )
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    root = Path(tmpdir)
+                    src = root / "Original.controller"
+                    src.write_text(source_text, encoding="utf-8")
+                    src_meta = root / "Original.controller.meta"
+                    src_meta.write_text(_DUMMY_META, encoding="utf-8")
+                    result = rename_asset(str(src), f"{stem}.controller", dry_run=False)
+                    self.assertEqual((True, "ASSET_RENAME_APPLIED"), (result["success"], result["code"]))
+                    self.assertEqual(expected_text.encode(), (root / f"{stem}.controller").read_bytes())
+                    self.assertEqual(_DUMMY_META.encode(), (root / f"{stem}.controller.meta").read_bytes())
+                    self.assertEqual((False, False), (src.exists(), src_meta.exists()))
+                self.assertEqual(
+                    (source_scalar, stem, True if unchanged else None),
+                    (result["data"]["m_name_before"], result["data"]["m_name_after"],
+                     result["data"].get("m_name_unchanged")),
+                )
+
+    def test_controller_metadata_move_failure_restores_source_bytes(self) -> None:
+        from unittest.mock import patch
+
+        fixture = CopyControllerMainObjectTests
+        source_text = fixture._PREFIX + fixture._STATE + fixture._MAIN
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "Original.controller"
+            src.write_text(source_text, encoding="utf-8")
+            src_meta = root / "Original.controller.meta"
+            src_meta.write_text(_DUMMY_META, encoding="utf-8")
+            original_rename = Path.rename
+
+            def fail_metadata_move(path: Path, target: str | Path) -> Path:
+                if path == src_meta:
+                    raise OSError("injected Controller metadata move failure")
+                return original_rename(path, target)
+
+            with patch.object(Path, "rename", fail_metadata_move):
+                result = rename_asset(str(src), "RenamedController.controller", dry_run=False)
+            assert_error_envelope(
+                result, code="ASSET_OP_WRITE_FAILED", message_match="injected Controller metadata move failure",
+            )
+            self.assertEqual(
+                (["Original.controller", "Original.controller.meta"], source_text.encode(), _DUMMY_META.encode()),
+                (sorted(path.name for path in root.iterdir()), src.read_bytes(), src_meta.read_bytes()),
+                "A metadata move failure rolls back the asset move and removes staged content",
+            )
+        self.assertEqual(False, result["data"]["meta_renamed"])
+        self.assertIn("meta_rename_failed", _diag_details(result))
 
 
 class RenameAssetFailureCodeTests(unittest.TestCase):

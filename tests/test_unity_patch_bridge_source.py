@@ -185,23 +185,19 @@ class TestPatchBridgeCoreConstantsPresent(unittest.TestCase):
 
     def test_protocol_version_constant_declared_in_canonical_core(self) -> None:
         text = self._core_text()
-        # The value is itself part of the contract — the cross-language
-        # drift checker reads request payloads with this number — so the
-        # test pins the literal.
-        self.assertRegex(
+        self.assertIn(
+            "public const int ProtocolVersion = "
+            "UnityEditorControlBridge.ProtocolVersion;",
             text,
-            r"public\s+const\s+int\s+ProtocolVersion\s*=\s*2\s*;",
-            "Canonical core source must declare 'public const int ProtocolVersion = 2;'.",
+            "Patch Bridge must alias the common Editor Bridge protocol authority.",
         )
         # The constant must NOT be redeclared in any other partial: a
-        # duplicate declaration would compile (partials share the
-        # namespace) but split the documented single-declaration site.
-        # Comment regions are stripped first so that a quoted-anchor
-        # comment (e.g. ``// was: public const int ProtocolVersion = 2;``)
-        # does not register as a redeclaration.
+        # duplicate declaration would split the single alias site.
         for name in (n for n in _EXPECTED_PARTIAL_NAMES if n != _CORE):
             with self.subTest(name=name):
-                other_text = _strip_cs_comments((_TOOLS_DIR / name).read_text(encoding="utf-8"))
+                other_text = _strip_cs_comments(
+                    (_TOOLS_DIR / name).read_text(encoding="utf-8")
+                )
                 self.assertNotRegex(
                     other_text,
                     r"public\s+const\s+int\s+ProtocolVersion\b",

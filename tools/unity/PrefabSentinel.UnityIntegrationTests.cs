@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace PrefabSentinel
 {
@@ -57,6 +59,8 @@ namespace PrefabSentinel
             public float duration_sec = 0f;
             public string test_asset_dir = TestAssetDir;
             public TestCaseResult[] cases = Array.Empty<TestCaseResult>();
+            public bool fixture_owned = false;
+            public string lease_phase = string.Empty;
         }
 
         [Serializable]
@@ -112,6 +116,19 @@ namespace PrefabSentinel
             public string code = string.Empty;
             public string message = string.Empty;
             public EditorControlDataReadback data = new EditorControlDataReadback();
+            public EditorControlDiagnosticReadback[] diagnostics =
+                Array.Empty<EditorControlDiagnosticReadback>();
+        }
+
+        [Serializable]
+        private sealed class EditorControlDiagnosticReadback
+        {
+            public string code = string.Empty;
+            public string severity = string.Empty;
+            public string path = string.Empty;
+            public string location = string.Empty;
+            public string detail = string.Empty;
+            public string evidence = string.Empty;
         }
 
         [Serializable]
@@ -213,6 +230,7 @@ namespace PrefabSentinel
             // remain past the requested page.
             public bool saved = false;
             public string serialized_property_json = string.Empty;
+            public string serialized_surface_json = string.Empty;
 
             public string next_cursor = string.Empty;
         }
@@ -437,6 +455,25 @@ namespace PrefabSentinel
                         Test_EditorCtrl_SetProperty_Quaternion_WrongComponentCountRejected),
                     ("EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp",
                         Test_EditorCtrl_SerializedProperty_ReadListWriteDryRunNoOp),
+                    // Issue #166 — deterministic Inspector Scene ownership matrix
+                    ("EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+                        Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget),
+                    ("EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+                        Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget),
+                    ("EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene",
+                        Test_EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene),
+                    ("EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt",
+                        Test_EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt),
+                    ("EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes",
+                        Test_EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes),
+                    ("EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp",
+                        Test_EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp),
+                    ("EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure",
+                        Test_EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure),
+                    ("EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure",
+                        Test_EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure),
+                    ("EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure",
+                        Test_EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure),
                     // Issues #92/#93/#94/#95/#98/#101/#102 live opt-in probes.
                     ("Live_ClientSim_Profile_Reports_Side_Effects",
                         Test_Live_ClientSim_Profile_Reports_Side_Effects),
@@ -473,7 +510,24 @@ namespace PrefabSentinel
                     }
                     catch (Exception ex)
                     {
-                        caseResult = Fail(name, $"Unhandled exception: {ex.Message}");
+                        Debug.LogWarning(
+                            $"[PrefabSentinel] integration case '{name}' threw: {ex}");
+                        UnityAcceptanceCaseFailure failure =
+                            UnityAcceptanceCaseFailure.FromException(name, ex);
+                        caseResult = new TestCaseResult
+                        {
+                            name = name,
+                            passed = false,
+                            message = failure.Message,
+                            diagnostics = new[]
+                            {
+                                new TestDiagnostic
+                                {
+                                    detail = failure.Code,
+                                    evidence = failure.Message
+                                }
+                            }
+                        };
                     }
                     caseResult.name = name;
                     caseResult.duration_sec = Time.realtimeSinceStartup - caseStart;
@@ -507,6 +561,908 @@ namespace PrefabSentinel
             }
         }
 
+        private delegate TestCaseResult AcceptanceTestMethod(
+            string prefabPath,
+            string scenePath,
+            long consoleStartSequence);
+
+        internal static TestSuiteResult RunAcceptanceTestSuite(
+            string runId,
+            string requestId,
+            string[] requestPaths)
+        {
+            float suiteStart = Time.realtimeSinceStartup;
+            var originalSceneSetup =
+                UnityEditor.SceneManagement.EditorSceneManager.GetSceneManagerSetup();
+            ValidateOriginalSceneSetup(originalSceneSetup);
+
+            string acceptanceAssetDir =
+                UnityAcceptanceLeaseState.FixtureRootForRun(runId);
+            string prefabPath = acceptanceAssetDir + "/AcceptanceFixture.prefab";
+            string scenePath = acceptanceAssetDir + "/AcceptanceFixture.unity";
+            UnityAcceptanceLeaseState lease;
+            string leaseCode;
+            string leaseMessage;
+            if (!TryReserveAcceptanceLease(
+                runId,
+                originalSceneSetup,
+                new[] { acceptanceAssetDir },
+                requestId,
+                requestPaths,
+                out lease,
+                out leaseCode,
+                out leaseMessage))
+            {
+                return AcceptanceLeaseFailureResult(leaseCode, leaseMessage);
+            }
+
+            if (!lease.TryTransition(
+                runId,
+                UnityAcceptanceLeaseState.FixtureCreatedPhase,
+                out leaseCode,
+                out leaseMessage))
+            {
+                return AcceptanceLeaseFailureResult(leaseCode, leaseMessage);
+            }
+            UnityAcceptanceLeaseFile.Publish(
+                AcceptanceLeasePath,
+                JsonUtility.ToJson(lease, false));
+
+            UnityEditorControlBridge.ConsoleLogBuffer.StartCapture();
+            long consoleStartSequence =
+                UnityEditorControlBridge.ConsoleLogBuffer.PeekHighestIngestedSequenceId();
+            TestSuiteResult result;
+            try
+            {
+                EnsureAssetFolder(acceptanceAssetDir);
+                CreateTestPrefabAtPath(prefabPath);
+                CreateAcceptanceScene(scenePath, prefabPath);
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+
+                var tests = new (string name, AcceptanceTestMethod method)[]
+                {
+                    ("Acceptance_SavedSceneAndPrefabFixture",
+                        Test_Acceptance_SavedSceneAndPrefabFixture),
+                    ("Acceptance_DuplicateSameNameObjects",
+                        Test_Acceptance_DuplicateSameNameObjects),
+                    ("Acceptance_TransformMutationReadback",
+                        Test_Acceptance_TransformMutationReadback),
+                    ("Acceptance_PrimitivePropertyOverride",
+                        Test_Acceptance_PrimitivePropertyOverride),
+                    ("Acceptance_EditorBridgeRequest",
+                        Test_Acceptance_EditorBridgeRequest),
+                    ("Acceptance_ConsoleErrorZero",
+                        Test_Acceptance_ConsoleErrorZero),
+                };
+
+                var results = new List<TestCaseResult>();
+                int passed = 0;
+                foreach (var (name, method) in tests)
+                {
+                    float caseStart = Time.realtimeSinceStartup;
+                    TestCaseResult caseResult;
+                    try
+                    {
+                        caseResult = method(
+                            prefabPath,
+                            scenePath,
+                            consoleStartSequence);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning(
+                            $"[PrefabSentinel] integration case '{name}' threw: {ex}");
+                        UnityAcceptanceCaseFailure failure =
+                            UnityAcceptanceCaseFailure.FromException(name, ex);
+                        caseResult = new TestCaseResult
+                        {
+                            name = name,
+                            passed = false,
+                            message = failure.Message,
+                            diagnostics = new[]
+                            {
+                                new TestDiagnostic
+                                {
+                                    detail = failure.Code,
+                                    evidence = failure.Message
+                                }
+                            }
+                        };
+                    }
+
+                    caseResult.name = name;
+                    caseResult.duration_sec =
+                        Time.realtimeSinceStartup - caseStart;
+                    results.Add(caseResult);
+                    if (caseResult.passed) passed++;
+                }
+
+                float duration = Time.realtimeSinceStartup - suiteStart;
+                int total = results.Count;
+                bool allPassed = passed == total;
+                result = new TestSuiteResult
+                {
+                    success = allPassed,
+                    severity = allPassed ? "info" : "error",
+                    code = allPassed
+                        ? "INTEGRATION_TEST_OK"
+                        : "INTEGRATION_TEST_FAILED",
+                    message = $"{passed}/{total} tests passed.",
+                    data = new TestSuiteData
+                    {
+                        total = total,
+                        passed = passed,
+                        failed = total - passed,
+                        duration_sec = duration,
+                        cases = results.ToArray(),
+                        fixture_owned = true,
+                        lease_phase = UnityAcceptanceLeaseState.SmokeCompletePhase
+                    }
+                };
+            }
+            finally
+            {
+                RestoreOriginalSceneSetup(originalSceneSetup);
+            }
+
+            if (!lease.TryTransition(
+                runId,
+                UnityAcceptanceLeaseState.SmokeCompletePhase,
+                out leaseCode,
+                out leaseMessage))
+            {
+                return AcceptanceLeaseFailureResult(leaseCode, leaseMessage);
+            }
+            UnityAcceptanceLeaseFile.Publish(
+                AcceptanceLeasePath,
+                JsonUtility.ToJson(lease, false));
+            return result;
+        }
+
+        internal static UnityAcceptanceLeaseSummary GetAcceptanceLeaseStatus(
+            string runId,
+            string currentRequestPath)
+        {
+            if (!UnityAcceptanceLeaseState.IsValidRunId(runId))
+            {
+                return UnityAcceptanceLeaseSummary.Error(
+                    "EDITOR_CTRL_ACCEPTANCE_RUN_ID_INVALID",
+                    "run_id must be exactly 32 lowercase hexadecimal characters.");
+            }
+
+            UnityAcceptanceLeaseState lease;
+            bool exists;
+            string code;
+            string message;
+            if (!TryLoadAcceptanceLease(
+                out lease,
+                out exists,
+                out code,
+                out message))
+            {
+                return UnityAcceptanceLeaseSummary.Error(code, message);
+            }
+
+            if (!exists)
+            {
+                return UnityAcceptanceLeaseSummary.Ok(
+                    "ACCEPTANCE_STATUS_OK",
+                    "No active acceptance cleanup lease exists.",
+                    UnityAcceptanceLeaseState.CleanedPhase,
+                    cleanupRequired: false,
+                    cleanupComplete: true);
+            }
+
+            if (!lease.TryAssertOwner(
+                runId,
+                currentRequestPath,
+                out code,
+                out message))
+                return UnityAcceptanceLeaseSummary.Error(code, message);
+
+            bool cleanupRequired =
+                lease.phase != UnityAcceptanceLeaseState.CleanedPhase;
+            return UnityAcceptanceLeaseSummary.Ok(
+                "ACCEPTANCE_STATUS_OK",
+                "Acceptance cleanup lease status is available.",
+                lease.phase,
+                cleanupRequired,
+                cleanupComplete: !cleanupRequired);
+        }
+
+        internal static UnityAcceptanceLeaseSummary CleanupAcceptanceLease(
+            string runId,
+            string currentRequestPath)
+        {
+            if (!UnityAcceptanceLeaseState.IsValidRunId(runId))
+            {
+                return UnityAcceptanceLeaseSummary.Error(
+                    "EDITOR_CTRL_ACCEPTANCE_RUN_ID_INVALID",
+                    "run_id must be exactly 32 lowercase hexadecimal characters.");
+            }
+
+            UnityAcceptanceLeaseState lease;
+            bool exists;
+            string code;
+            string message;
+            if (!TryLoadAcceptanceLease(
+                out lease,
+                out exists,
+                out code,
+                out message))
+            {
+                return UnityAcceptanceLeaseSummary.Error(code, message);
+            }
+
+            if (!exists)
+            {
+                return UnityAcceptanceLeaseSummary.Ok(
+                    "ACCEPTANCE_CLEANUP_OK",
+                    "Acceptance cleanup is already complete.",
+                    UnityAcceptanceLeaseState.CleanedPhase,
+                    cleanupRequired: false,
+                    cleanupComplete: true,
+                    sceneSetupRestored: true,
+                    leaseRemoved: true);
+            }
+
+            if (!lease.TryAssertOwner(
+                runId,
+                currentRequestPath,
+                out code,
+                out message))
+                return UnityAcceptanceLeaseSummary.Error(code, message);
+
+            if (lease.phase == UnityAcceptanceLeaseState.CleanedPhase)
+            {
+                try
+                {
+                    System.IO.File.Delete(AcceptanceLeasePath);
+                    return UnityAcceptanceLeaseSummary.Ok(
+                        "ACCEPTANCE_CLEANUP_OK",
+                        "Acceptance cleanup is already complete.",
+                        UnityAcceptanceLeaseState.CleanedPhase,
+                        cleanupRequired: false,
+                        cleanupComplete: true,
+                        sceneSetupRestored: true,
+                        leaseRemoved: true);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] acceptance lease removal failed: {ex}");
+                    return UnityAcceptanceLeaseSummary.Error(
+                        "EDITOR_CTRL_ACCEPTANCE_CLEANUP_FAILED",
+                        "Acceptance cleanup lease could not be removed.");
+                }
+            }
+
+            try
+            {
+                if (!lease.TryBeginCleanup(
+                    runId,
+                    out code,
+                    out message))
+                {
+                    return UnityAcceptanceLeaseSummary.Error(code, message);
+                }
+                PublishAcceptanceLease(lease);
+
+                RestoreOriginalSceneSetup(ToSceneSetup(lease));
+                VerifyOriginalSceneSetup(lease);
+                int deletedFixtureCount = 0;
+                foreach (string fixturePath in lease.fixture_paths)
+                {
+                    if (CleanupAcceptanceAssets(fixturePath)) deletedFixtureCount++;
+                }
+                if (!lease.TryDeleteRequestArtifacts(
+                    currentRequestPath,
+                    out code,
+                    out message))
+                {
+                    return UnityAcceptanceLeaseSummary.Error(code, message);
+                }
+                VerifyOriginalSceneSetup(lease);
+
+                if (!lease.TryTransition(
+                    runId,
+                    UnityAcceptanceLeaseState.CleanedPhase,
+                    out code,
+                    out message))
+                {
+                    return UnityAcceptanceLeaseSummary.Error(code, message);
+                }
+                PublishAcceptanceLease(lease);
+                System.IO.File.Delete(AcceptanceLeasePath);
+                return UnityAcceptanceLeaseSummary.Ok(
+                    "ACCEPTANCE_CLEANUP_OK",
+                    "Acceptance cleanup is complete.",
+                    UnityAcceptanceLeaseState.CleanedPhase,
+                    cleanupRequired: false,
+                    cleanupComplete: true,
+                    sceneSetupRestored: true,
+                    deletedFixtureCount: deletedFixtureCount,
+                    deletedRequestArtifactCount: lease.request_paths.Length,
+                    leaseRemoved: true);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] acceptance cleanup failed: {ex}");
+                return UnityAcceptanceLeaseSummary.Error(
+                    "EDITOR_CTRL_ACCEPTANCE_CLEANUP_FAILED",
+                    "Acceptance cleanup did not complete.");
+            }
+        }
+
+        private static string AcceptanceLeasePath
+        {
+            get
+            {
+                var assetsDirectory =
+                    new System.IO.DirectoryInfo(Application.dataPath);
+                if (assetsDirectory.Parent == null)
+                {
+                    throw new InvalidOperationException(
+                        "Unity project root could not be resolved.");
+                }
+                return System.IO.Path.Combine(
+                    assetsDirectory.Parent.FullName,
+                    "Library",
+                    "PrefabSentinel",
+                    "acceptance-lease-v1.json");
+            }
+        }
+
+        private static bool TryReserveAcceptanceLease(
+            string runId,
+            UnityEditor.SceneManagement.SceneSetup[] originalSceneSetup,
+            string[] fixturePaths,
+            string requestId,
+            string[] requestPaths,
+            out UnityAcceptanceLeaseState lease,
+            out string errorCode,
+            out string errorMessage)
+        {
+            lease = null;
+            errorCode = string.Empty;
+            errorMessage = string.Empty;
+
+            UnityAcceptanceLeaseState existingLease;
+            bool exists;
+            if (!TryLoadAcceptanceLease(
+                out existingLease,
+                out exists,
+                out errorCode,
+                out errorMessage))
+            {
+                return false;
+            }
+
+            if (exists)
+            {
+                if (existingLease.phase
+                    != UnityAcceptanceLeaseState.CleanedPhase)
+                {
+                    errorCode = "EDITOR_CTRL_ACCEPTANCE_LEASE_UNRESOLVED";
+                    errorMessage =
+                        "An unresolved acceptance cleanup lease blocks a new run.";
+                    return false;
+                }
+
+                try
+                {
+                    System.IO.File.Delete(AcceptanceLeasePath);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning(
+                        $"[PrefabSentinel] stale acceptance lease removal failed: {ex}");
+                    errorCode = "EDITOR_CTRL_ACCEPTANCE_LEASE_INVALID";
+                    errorMessage =
+                        "The completed acceptance cleanup lease could not be removed.";
+                    return false;
+                }
+            }
+
+            try
+            {
+                lease = UnityAcceptanceLeaseState.Create(
+                    runId,
+                    CaptureOriginalSceneState(originalSceneSetup),
+                    fixturePaths,
+                    requestId,
+                    requestPaths);
+                PublishAcceptanceLease(lease);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] acceptance lease reservation failed: {ex}");
+                errorCode = "EDITOR_CTRL_ACCEPTANCE_LEASE_INVALID";
+                errorMessage = "Acceptance cleanup lease could not be reserved.";
+                return false;
+            }
+        }
+
+        private static bool TryLoadAcceptanceLease(
+            out UnityAcceptanceLeaseState lease,
+            out bool exists,
+            out string errorCode,
+            out string errorMessage)
+        {
+            lease = null;
+            exists = System.IO.File.Exists(AcceptanceLeasePath);
+            errorCode = string.Empty;
+            errorMessage = string.Empty;
+            if (!exists) return true;
+
+            try
+            {
+                lease = JsonUtility.FromJson<UnityAcceptanceLeaseState>(
+                    System.IO.File.ReadAllText(AcceptanceLeasePath));
+                if (lease == null
+                    || !lease.TryValidate(out errorCode, out errorMessage))
+                {
+                    errorCode = "EDITOR_CTRL_ACCEPTANCE_LEASE_INVALID";
+                    errorMessage = "Acceptance cleanup lease is invalid.";
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[PrefabSentinel] acceptance lease load failed: {ex}");
+                errorCode = "EDITOR_CTRL_ACCEPTANCE_LEASE_INVALID";
+                errorMessage = "Acceptance cleanup lease is invalid.";
+                return false;
+            }
+        }
+
+        private static void PublishAcceptanceLease(
+            UnityAcceptanceLeaseState lease)
+        {
+            UnityAcceptanceLeaseFile.Publish(
+                AcceptanceLeasePath,
+                JsonUtility.ToJson(lease, false));
+        }
+
+        private static UnityAcceptanceLeaseScene[] CaptureOriginalSceneState(
+            UnityEditor.SceneManagement.SceneSetup[] originalSceneSetup)
+        {
+            var scenes = new List<UnityAcceptanceLeaseScene>();
+            foreach (var setup in originalSceneSetup)
+            {
+                if (string.IsNullOrEmpty(setup.path)
+                    || (setup.isActive && !setup.isLoaded))
+                {
+                    throw new InvalidOperationException(
+                        "Original Scene setup is malformed.");
+                }
+
+                var scene =
+                    UnityEngine.SceneManagement.SceneManager.GetSceneByPath(
+                        setup.path);
+                if (setup.isLoaded
+                    && (!scene.IsValid() || !scene.isLoaded))
+                {
+                    throw new InvalidOperationException(
+                        "Loaded original Scene could not be captured.");
+                }
+
+                scenes.Add(new UnityAcceptanceLeaseScene
+                {
+                    path = setup.path,
+                    is_loaded = setup.isLoaded,
+                    is_active = setup.isActive,
+                    is_dirty = setup.isLoaded && scene.isDirty,
+                });
+            }
+            return scenes.ToArray();
+        }
+
+        private static UnityEditor.SceneManagement.SceneSetup[] ToSceneSetup(
+            UnityAcceptanceLeaseState lease)
+        {
+            var setup = new UnityEditor.SceneManagement.SceneSetup[
+                lease.original_scenes.Length];
+            for (int index = 0; index < lease.original_scenes.Length; index++)
+            {
+                UnityAcceptanceLeaseScene scene =
+                    lease.original_scenes[index];
+                setup[index] = new UnityEditor.SceneManagement.SceneSetup
+                {
+                    path = scene.path,
+                    isLoaded = scene.is_loaded,
+                    isActive = scene.is_active,
+                };
+            }
+            return setup;
+        }
+
+        private static void VerifyOriginalSceneSetup(
+            UnityAcceptanceLeaseState lease)
+        {
+            UnityEditor.SceneManagement.SceneSetup[] setup =
+                UnityEditor.SceneManagement.EditorSceneManager.GetSceneManagerSetup();
+            UnityAcceptanceLeaseScene[] actual =
+                CaptureOriginalSceneState(setup);
+            if (!UnityAcceptanceSceneSetupComparer.Matches(
+                lease.original_scenes,
+                actual))
+            {
+                throw new InvalidOperationException(
+                    "Original Scene setup did not restore.");
+            }
+
+            for (int index = 0; index < setup.Length; index++)
+            {
+                UnityEditor.SceneManagement.SceneSetup actualSetup = setup[index];
+                UnityAcceptanceLeaseScene expected =
+                    lease.original_scenes[index];
+                if (actualSetup.path != expected.path
+                    || actualSetup.isLoaded != expected.is_loaded
+                    || actualSetup.isActive != expected.is_active)
+                {
+                    throw new InvalidOperationException(
+                        "Original Scene setup did not restore.");
+                }
+
+                if (expected.is_loaded)
+                {
+                    var scene =
+                        UnityEngine.SceneManagement.SceneManager.GetSceneByPath(
+                            expected.path);
+                    if (!scene.IsValid()
+                        || !scene.isLoaded
+                        || scene.isDirty != expected.is_dirty)
+                    {
+                        throw new InvalidOperationException(
+                            "Original loaded Scene dirtiness did not restore.");
+                    }
+                }
+            }
+            AssertNoLoadedTestScenes();
+        }
+
+        private static TestSuiteResult AcceptanceLeaseFailureResult(
+            string code,
+            string message)
+        {
+            return new TestSuiteResult
+            {
+                success = false,
+                severity = "error",
+                code = code,
+                message = message,
+                data = new TestSuiteData
+                {
+                    total = 0,
+                    passed = 0,
+                    failed = 0,
+                    cases = Array.Empty<TestCaseResult>(),
+                }
+            };
+        }
+
+        private static void EnsureAssetFolder(string assetFolder)
+        {
+            string[] segments = assetFolder.Split('/');
+            string current = segments[0];
+            for (int index = 1; index < segments.Length; index++)
+            {
+                string next = current + "/" + segments[index];
+                if (!AssetDatabase.IsValidFolder(next))
+                    AssetDatabase.CreateFolder(current, segments[index]);
+                current = next;
+            }
+        }
+
+        private static void CreateAcceptanceScene(
+            string scenePath,
+            string prefabPath)
+        {
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null)
+                throw new InvalidOperationException(
+                    "Acceptance Prefab fixture could not be loaded.");
+
+            var scene = EditorSceneManager.NewScene(
+                NewSceneSetup.EmptyScene,
+                NewSceneMode.Single);
+            for (int index = 0; index < 2; index++)
+            {
+                var instance = PrefabUtility.InstantiatePrefab(
+                    prefab,
+                    scene) as GameObject;
+                if (instance == null)
+                    throw new InvalidOperationException(
+                        "Acceptance Prefab instance could not be created.");
+                instance.name = "AcceptanceInstance";
+            }
+
+            var duplicateParent =
+                new GameObject("AcceptanceDuplicateParent");
+            for (int index = 0; index < 2; index++)
+            {
+                var duplicate = new GameObject("AcceptanceDuplicate");
+                duplicate.transform.SetParent(
+                    duplicateParent.transform,
+                    false);
+            }
+
+            if (!EditorSceneManager.SaveScene(scene, scenePath))
+                throw new InvalidOperationException(
+                    "Acceptance Scene fixture could not be saved.");
+        }
+
+        private static GameObject[] GetAcceptanceInstances(string scenePath)
+        {
+            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByPath(
+                scenePath);
+            if (!scene.IsValid() || !scene.isLoaded)
+                return Array.Empty<GameObject>();
+
+            var instances = new List<GameObject>();
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (root.name == "AcceptanceInstance")
+                    instances.Add(root);
+            }
+            return instances.ToArray();
+        }
+
+        private static TestCaseResult
+            Test_Acceptance_SavedSceneAndPrefabFixture(
+                string prefabPath,
+                string scenePath,
+                long consoleStartSequence)
+        {
+            const string name = "Acceptance_SavedSceneAndPrefabFixture";
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null)
+                return Fail(name, "Saved Prefab fixture could not be loaded.");
+
+            var sceneAsset = AssetDatabase.LoadAssetAtPath<SceneAsset>(scenePath);
+            if (sceneAsset == null)
+                return Fail(name, "Saved Scene fixture could not be loaded.");
+
+            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByPath(
+                scenePath);
+            if (!scene.IsValid() || !scene.isLoaded || scene.isDirty)
+                return Fail(
+                    name,
+                    "Acceptance Scene must be loaded, saved, and clean.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult
+            Test_Acceptance_DuplicateSameNameObjects(
+                string prefabPath,
+                string scenePath,
+                long consoleStartSequence)
+        {
+            const string name = "Acceptance_DuplicateSameNameObjects";
+            GameObject[] instances = GetAcceptanceInstances(scenePath);
+            if (instances.Length != 2)
+                return Fail(
+                    name,
+                    $"Expected two same-name Prefab instances, got {instances.Length}.");
+            if (instances[0].name != instances[1].name)
+                return Fail(name, "Acceptance sibling names must be identical.");
+            if (instances[0].transform.parent != instances[1].transform.parent)
+                return Fail(name, "Acceptance instances must be siblings.");
+
+            var scene = UnityEngine.SceneManagement.SceneManager.GetSceneByPath(
+                scenePath);
+            GameObject duplicateParent = null;
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (root.name == "AcceptanceDuplicateParent")
+                {
+                    duplicateParent = root;
+                    break;
+                }
+            }
+            if (duplicateParent == null
+                || duplicateParent.transform.childCount != 2)
+            {
+                return Fail(
+                    name,
+                    "Acceptance duplicate hierarchy is unavailable.");
+            }
+
+            const string ambiguousPath =
+                "AcceptanceDuplicateParent/AcceptanceDuplicate";
+            bool ambiguousResolved =
+                UnityPatchBridge.TryResolveHierarchyPathWithResolver(
+                    duplicateParent,
+                    ambiguousPath,
+                    out Transform ambiguousTarget,
+                    out string ambiguityError);
+            if (ambiguousResolved || ambiguousTarget != null)
+                return Fail(name, "Ambiguous Scene path unexpectedly resolved.");
+            if (ambiguityError.IndexOf(
+                    "matched 2 same-named objects",
+                    StringComparison.Ordinal) < 0)
+            {
+                return Fail(
+                    name,
+                    "Same-name Scene path did not report ambiguity.");
+            }
+
+            const string exactPath =
+                "AcceptanceDuplicateParent/AcceptanceDuplicate#0";
+            bool exactResolved =
+                UnityPatchBridge.TryResolveHierarchyPathWithResolver(
+                    duplicateParent,
+                    exactPath,
+                    out Transform exactTarget,
+                    out string exactError);
+            if (!exactResolved
+                || exactTarget != duplicateParent.transform.GetChild(0)
+                || !string.IsNullOrEmpty(exactError))
+            {
+                return Fail(
+                    name,
+                    "Indexed Scene path did not resolve the first sibling.");
+            }
+
+            return Pass(name);
+        }
+
+        private static TestCaseResult
+            Test_Acceptance_TransformMutationReadback(
+                string prefabPath,
+                string scenePath,
+                long consoleStartSequence)
+        {
+            const string name = "Acceptance_TransformMutationReadback";
+            GameObject[] instances = GetAcceptanceInstances(scenePath);
+            if (instances.Length != 2)
+                return Fail(name, "Acceptance instances are unavailable.");
+
+            var serialized = new SerializedObject(instances[0].transform);
+            var position = serialized.FindProperty("m_LocalPosition");
+            if (position == null)
+                return Fail(name, "Transform m_LocalPosition was not found.");
+
+            var expected = new Vector3(1.25f, -2.5f, 3.75f);
+            position.vector3Value = expected;
+            serialized.ApplyModifiedProperties();
+            serialized.Update();
+
+            var readback = serialized.FindProperty("m_LocalPosition");
+            if (readback == null || readback.vector3Value != expected)
+                return Fail(name, "Transform mutation did not round-trip.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult
+            Test_Acceptance_PrimitivePropertyOverride(
+                string prefabPath,
+                string scenePath,
+                long consoleStartSequence)
+        {
+            const string name = "Acceptance_PrimitivePropertyOverride";
+            GameObject[] instances = GetAcceptanceInstances(scenePath);
+            if (instances.Length != 2)
+                return Fail(name, "Acceptance instances are unavailable.");
+
+            var collider = instances[1].GetComponent<BoxCollider>();
+            if (collider == null)
+                return Fail(name, "Acceptance BoxCollider is unavailable.");
+
+            var sourceCollider =
+                PrefabUtility.GetCorrespondingObjectFromSource(collider);
+            if (sourceCollider == null)
+                return Fail(name, "Acceptance source BoxCollider is unavailable.");
+
+            var serialized = new SerializedObject(collider);
+            var isTrigger = serialized.FindProperty("m_IsTrigger");
+            if (isTrigger == null)
+                return Fail(name, "BoxCollider m_IsTrigger was not found.");
+
+            isTrigger.boolValue = true;
+            serialized.ApplyModifiedProperties();
+            if (!collider.isTrigger)
+                return Fail(name, "Primitive bool mutation did not apply.");
+
+            var modifications = PrefabUtility.GetPropertyModifications(
+                instances[1]);
+            bool foundOverride = false;
+            if (modifications != null)
+            {
+                foreach (var modification in modifications)
+                {
+                    if (modification.target == sourceCollider
+                        && modification.propertyPath == "m_IsTrigger")
+                    {
+                        foundOverride = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!foundOverride)
+                return Fail(name, "Primitive property override was not recorded.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Acceptance_EditorBridgeRequest(
+            string prefabPath,
+            string scenePath,
+            long consoleStartSequence)
+        {
+            const string name = "Acceptance_EditorBridgeRequest";
+            var response = RunEditorControlBridge(
+                BuildEditorControlRequest("list_roots"));
+            var error = AssertEditorControlSuccess(name, response);
+            if (error != null) return error;
+            if (response.data.children == null)
+                return Fail(name, "Editor Bridge omitted Scene roots.");
+
+            int matchingRoots = 0;
+            foreach (var root in response.data.children)
+            {
+                if (root != null && root.name == "AcceptanceInstance")
+                    matchingRoots++;
+            }
+
+            if (matchingRoots != 2)
+                return Fail(
+                    name,
+                    $"Editor Bridge returned {matchingRoots} acceptance roots.");
+            return Pass(name);
+        }
+
+        private static TestCaseResult Test_Acceptance_ConsoleErrorZero(
+            string prefabPath,
+            string scenePath,
+            long consoleStartSequence)
+        {
+            const string name = "Acceptance_ConsoleErrorZero";
+            string extra = "\"max_entries\":200,"
+                + "\"log_type_filter\":\"all\","
+                + "\"since_sequence\":"
+                + consoleStartSequence.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"order\":\"oldest_first\"";
+            var response = RunEditorControlBridge(
+                BuildEditorControlRequest("capture_console_logs", extra));
+            var error = AssertEditorControlSuccess(name, response);
+            if (error != null) return error;
+            if (response.data.entries == null)
+                return Fail(name, "Console capture omitted entries.");
+
+            foreach (var entry in response.data.entries)
+            {
+                if (entry == null) continue;
+                if (entry.log_type == "Error"
+                    || entry.log_type == "Exception"
+                    || entry.log_type == "Assert")
+                {
+                    return Fail(
+                        name,
+                        $"Console captured {entry.log_type} during acceptance.");
+                }
+            }
+            return Pass(name);
+        }
+
+        private static bool CleanupAcceptanceAssets(string assetFolder)
+        {
+            if (!AssetDatabase.IsValidFolder(assetFolder)) return false;
+
+            DeleteAssetOrThrow(assetFolder);
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            if (AssetDatabase.IsValidFolder(assetFolder))
+                throw new InvalidOperationException(
+                    "Acceptance asset directory still exists after deletion.");
+            return true;
+        }
 
         /// <summary>
         /// Reject scene state that cannot be restored without discarding user
@@ -585,11 +1541,15 @@ namespace PrefabSentinel
 
         private static string CreateTestPrefab()
         {
-            string path = TestAssetDir + "/TestFixture.prefab";
+            return CreateTestPrefabAtPath(TestAssetDir + "/TestFixture.prefab");
+        }
+
+        private static string CreateTestPrefabAtPath(string path)
+        {
             var go = new GameObject("TestFixtureRoot");
             go.AddComponent<BoxCollider>();
             var audio = go.AddComponent<AudioSource>();
-            // Seed array with 3 elements for array tests via AnimationCurve keys
+            // Seed stable primitive values used by the historical suite.
             audio.volume = 1.0f;
             audio.priority = 64;
 
@@ -890,7 +1850,8 @@ namespace PrefabSentinel
         private static string BuildEditorControlRequest(string action, string extraFields = "")
         {
             string extra = string.IsNullOrEmpty(extraFields) ? "" : "," + extraFields;
-            return "{\"protocol_version\":1,\"action\":\"" + EscapeJsonString(action) + "\"" + extra + "}";
+            return "{\"protocol_version\":" + ProtocolVersion
+                + ",\"action\":\"" + EscapeJsonString(action) + "\"" + extra + "}";
         }
 
         private static TestCaseResult AssertEditorControlSuccess(string name, EditorControlResponseReadback resp)
@@ -907,6 +1868,962 @@ namespace PrefabSentinel
             if (!string.IsNullOrEmpty(expectedCode) && resp.code != expectedCode)
                 return Fail(name, $"Expected code={expectedCode}, got {resp.code}.");
             return null;
+        }
+
+        // ----------------------------------------------------------------
+        // Issue #166 — Inspector Scene ownership integration matrix
+        // ----------------------------------------------------------------
+
+        private static Scene RequireLoadedInspectorScene(string path)
+        {
+            Scene resolved = SceneManager.GetSceneByPath(path);
+            if (!resolved.IsValid()
+                || !resolved.isLoaded
+                || !string.Equals(
+                    resolved.path.Replace('\\', '/'),
+                    path,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Expected one loaded Inspector Scene at exact path: {path}.");
+            }
+            return resolved;
+        }
+
+        private static Scene CreateInspectorSceneFixture(string fileName, bool keepLoaded)
+        {
+            if (string.IsNullOrEmpty(fileName)
+                || fileName.IndexOf('/') >= 0
+                || fileName.IndexOf('\\') >= 0
+                || !fileName.EndsWith(".unity", StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Inspector Scene fixture names must be bare .unity filenames.",
+                    nameof(fileName));
+            }
+
+            string path = TestAssetDir + "/" + fileName;
+            Scene scene = EditorSceneManager.NewScene(
+                NewSceneSetup.EmptyScene,
+                NewSceneMode.Additive);
+            var target = new GameObject("InspectorSceneTarget");
+            SceneManager.MoveGameObjectToScene(target, scene);
+            target.AddComponent<BoxCollider>();
+            if (!EditorSceneManager.SaveScene(scene, path))
+            {
+                throw new InvalidOperationException(
+                    $"Could not save Inspector Scene fixture: {path}.");
+            }
+
+            Scene savedScene = RequireLoadedInspectorScene(path);
+            if (savedScene.isDirty)
+            {
+                throw new InvalidOperationException(
+                    $"Saved Inspector Scene fixture remained dirty: {path}.");
+            }
+            if (!EditorSceneManager.CloseScene(savedScene, true))
+            {
+                throw new InvalidOperationException(
+                    $"Could not close Inspector Scene fixture: {path}.");
+            }
+            if (!keepLoaded)
+            {
+                return savedScene;
+            }
+
+            Scene opened = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+            Scene reopenedScene = RequireLoadedInspectorScene(path);
+            if (reopenedScene.handle != opened.handle)
+            {
+                throw new InvalidOperationException(
+                    $"Opened and path-resolved Inspector Scene handles did not match: {path}.");
+            }
+            return reopenedScene;
+        }
+
+        private static InspectorSceneLifecycle.Snapshot CloneInspectorSceneSnapshot(
+            InspectorSceneLifecycle.Snapshot source)
+        {
+            var entries = new InspectorSceneLifecycle.Entry[source.scenes.Length];
+            for (int index = 0; index < source.scenes.Length; index++)
+            {
+                InspectorSceneLifecycle.Entry entry = source.scenes[index];
+                entries[index] = new InspectorSceneLifecycle.Entry
+                {
+                    order = entry.order,
+                    handle = entry.handle,
+                    path = entry.path,
+                    dirty = entry.dirty,
+                };
+            }
+            return new InspectorSceneLifecycle.Snapshot
+            {
+                scenes = entries,
+                active_handle = source.active_handle,
+                active_path = source.active_path,
+            };
+        }
+
+        private static InspectorSceneLifecycle.Snapshot
+            BuildInspectorSnapshotWithAdditionalScene(
+                InspectorSceneLifecycle.Snapshot before,
+                Scene added)
+        {
+            InspectorSceneLifecycle.Snapshot result =
+                CloneInspectorSceneSnapshot(before);
+            var entries =
+                new InspectorSceneLifecycle.Entry[result.scenes.Length + 1];
+            Array.Copy(result.scenes, entries, result.scenes.Length);
+            entries[entries.Length - 1] = new InspectorSceneLifecycle.Entry
+            {
+                order = entries.Length - 1,
+                handle = added.handle,
+                path = added.path.Replace('\\', '/'),
+                dirty = added.isDirty,
+            };
+            result.scenes = entries;
+            return result;
+        }
+
+        private static InspectorSceneLifecycle.Snapshot
+            BuildInspectorSnapshotWithActiveScene(
+                InspectorSceneLifecycle.Snapshot before,
+                Scene active)
+        {
+            InspectorSceneLifecycle.Snapshot result =
+                CloneInspectorSceneSnapshot(before);
+            result.active_handle = active.handle;
+            result.active_path = active.path.Replace('\\', '/');
+            return result;
+        }
+
+        private static InspectorSceneLifecycle.Snapshot
+            BuildInspectorSnapshotWithDirtyMismatch(
+                InspectorSceneLifecycle.Snapshot before)
+        {
+            InspectorSceneLifecycle.Snapshot result =
+                CloneInspectorSceneSnapshot(before);
+            if (result.scenes.Length == 0)
+            {
+                throw new InvalidOperationException(
+                    "Dirty-mismatch injection requires one loaded startup Scene.");
+            }
+            result.scenes[0].dirty = !result.scenes[0].dirty;
+            return result;
+        }
+
+        private static bool InspectorSceneIsLoaded(string path)
+        {
+            for (int index = 0; index < SceneManager.sceneCount; index++)
+            {
+                Scene scene = SceneManager.GetSceneAt(index);
+                if (scene.isLoaded
+                    && string.Equals(
+                        scene.path.Replace('\\', '/'),
+                        path,
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static EditorControlResponseReadback RunInspectorSceneOperation(
+            string assetPath,
+            string symbolPath,
+            out int warningCount)
+        {
+            int warnings = 0;
+            Application.LogCallback warningHandler =
+                (condition, stackTrace, type) =>
+                {
+                    if (type == LogType.Warning) warnings++;
+                };
+            Application.logMessageReceived += warningHandler;
+            EditorControlResponseReadback response;
+            try
+            {
+                string projectRoot = Path.GetDirectoryName(Application.dataPath);
+                response = RunEditorControlBridge(BuildEditorControlRequest(
+                    "editor_inspect_serialized_surface",
+                    "\"asset_path\":\"" + EscapeJsonString(assetPath) + "\","
+                    + "\"expected_project_root\":\""
+                    + EscapeJsonString(projectRoot)
+                    + "\",\"symbol_path\":\""
+                    + EscapeJsonString(symbolPath)
+                    + "\""));
+            }
+            finally
+            {
+                Application.logMessageReceived -= warningHandler;
+            }
+            warningCount = warnings;
+            return response;
+        }
+
+        private static TestCaseResult AssertInspectorSceneSnapshot(
+            string name,
+            InspectorSceneLifecycle.Snapshot expected,
+            InspectorSceneLifecycle.Snapshot actual)
+        {
+            if (expected == null || actual == null)
+                return Fail(name, "Inspector Scene snapshot was null.");
+            if (expected.scenes.Length != actual.scenes.Length)
+            {
+                return Fail(
+                    name,
+                    $"Scene count changed: expected={expected.scenes.Length}, "
+                    + $"actual={actual.scenes.Length}.");
+            }
+            for (int index = 0; index < expected.scenes.Length; index++)
+            {
+                InspectorSceneLifecycle.Entry expectedEntry =
+                    expected.scenes[index];
+                InspectorSceneLifecycle.Entry actualEntry =
+                    actual.scenes[index];
+                if (expectedEntry.order != actualEntry.order
+                    || expectedEntry.handle != actualEntry.handle
+                    || !string.Equals(
+                        expectedEntry.path,
+                        actualEntry.path,
+                        StringComparison.Ordinal)
+                    || expectedEntry.dirty != actualEntry.dirty)
+                {
+                    return Fail(
+                        name,
+                        $"Scene snapshot entry {index} changed: "
+                        + $"expected={expectedEntry.order}/{expectedEntry.handle}/"
+                        + $"{expectedEntry.path}/{expectedEntry.dirty}, "
+                        + $"actual={actualEntry.order}/{actualEntry.handle}/"
+                        + $"{actualEntry.path}/{actualEntry.dirty}.");
+                }
+            }
+            if (expected.active_handle != actual.active_handle
+                || !string.Equals(
+                    expected.active_path,
+                    actual.active_path,
+                    StringComparison.Ordinal))
+            {
+                return Fail(
+                    name,
+                    $"Active Scene changed: expected={expected.active_handle}/"
+                    + $"{expected.active_path}, actual={actual.active_handle}/"
+                    + $"{actual.active_path}.");
+            }
+            return null;
+        }
+
+        private static TestCaseResult AssertInspectorWarningCount(
+            string name,
+            int warningCount)
+        {
+            return warningCount == 0
+                ? null
+                : Fail(
+                    name,
+                    $"Expected zero warnings during the controlled operation window, "
+                    + $"got {warningCount}.");
+        }
+
+        private static TestCaseResult AssertInspectorSurfaceSuccess(
+            string name,
+            EditorControlResponseReadback response)
+        {
+            TestCaseResult error = AssertEditorControlSuccess(name, response);
+            if (error != null) return error;
+            if (response.code != "EDITOR_CTRL_INSPECTOR_SURFACE_OK")
+            {
+                return Fail(
+                    name,
+                    $"Expected code=EDITOR_CTRL_INSPECTOR_SURFACE_OK, "
+                    + $"got {response.code}.");
+            }
+            if (response.data == null
+                || string.IsNullOrEmpty(response.data.serialized_surface_json))
+            {
+                return Fail(name, "Inspector Scene success returned no serialized surface.");
+            }
+            if (!response.data.read_only || response.data.executed)
+            {
+                return Fail(
+                    name,
+                    "Inspector Scene success must be read_only=true and executed=false.");
+            }
+            if (response.diagnostics != null && response.diagnostics.Length != 0)
+            {
+                return Fail(name, "Inspector Scene success returned unexpected diagnostics.");
+            }
+            return null;
+        }
+
+        private static TestCaseResult AssertInspectorSimpleFailure(
+            string name,
+            EditorControlResponseReadback response,
+            string expectedCode,
+            string expectedMessage,
+            int expectedDiagnosticCount)
+        {
+            TestCaseResult error =
+                AssertEditorControlFailure(name, response, expectedCode);
+            if (error != null) return error;
+            if (response.message != expectedMessage)
+            {
+                return Fail(
+                    name,
+                    $"Expected message={expectedMessage}, got {response.message}.");
+            }
+            int diagnosticCount =
+                response.diagnostics == null ? -1 : response.diagnostics.Length;
+            if (diagnosticCount != expectedDiagnosticCount)
+            {
+                return Fail(
+                    name,
+                    $"Expected diagnostic count={expectedDiagnosticCount}, "
+                    + $"got {diagnosticCount}.");
+            }
+            if (response.data != null
+                && !string.IsNullOrEmpty(response.data.serialized_surface_json))
+            {
+                return Fail(name, "Inspector Scene failure returned a normal surface.");
+            }
+            return null;
+        }
+
+        private static TestCaseResult AssertInspectorLifecycleFailure(
+            string name,
+            EditorControlResponseReadback response,
+            string expectedCode,
+            string expectedAssetPath,
+            string expectedDetail,
+            string expectedOwnership,
+            int[] expectedMatchedHandles,
+            bool expectedCleanupAttempted,
+            string expectedCloseResult,
+            bool expectedActiveRestoreAttempted,
+            string expectedActiveRestoreResult,
+            string[] expectedFailedPostconditions,
+            InspectorSceneLifecycle.Snapshot expectedBefore,
+            InspectorSceneLifecycle.Snapshot expectedAfter)
+        {
+            TestCaseResult error = AssertInspectorSimpleFailure(
+                name,
+                response,
+                expectedCode,
+                expectedDetail,
+                1);
+            if (error != null) return error;
+
+            EditorControlDiagnosticReadback diagnostic = response.diagnostics[0];
+            if (diagnostic == null
+                || diagnostic.code != expectedCode
+                || diagnostic.severity != "error"
+                || diagnostic.path != expectedAssetPath
+                || diagnostic.location != expectedOwnership
+                || diagnostic.detail != expectedDetail)
+            {
+                return Fail(name, "Scene lifecycle diagnostic identity was not exact.");
+            }
+
+            InspectorSceneLifecycle.Evidence evidence =
+                JsonUtility.FromJson<InspectorSceneLifecycle.Evidence>(
+                    diagnostic.evidence);
+            if (evidence == null)
+                return Fail(name, "Scene lifecycle evidence was not valid JSON.");
+            if (evidence.asset_path != expectedAssetPath
+                || evidence.ownership != expectedOwnership
+                || evidence.cleanup_attempted != expectedCleanupAttempted
+                || evidence.close_result != expectedCloseResult
+                || evidence.active_restore_attempted
+                    != expectedActiveRestoreAttempted
+                || evidence.active_restore_result != expectedActiveRestoreResult)
+            {
+                return Fail(name, "Scene lifecycle evidence status fields were not exact.");
+            }
+            if (evidence.matched_handles.Length != expectedMatchedHandles.Length)
+                return Fail(name, "Scene lifecycle matched handle count changed.");
+            for (int index = 0; index < expectedMatchedHandles.Length; index++)
+            {
+                if (evidence.matched_handles[index] != expectedMatchedHandles[index])
+                    return Fail(name, "Scene lifecycle matched handle identity changed.");
+            }
+            if (evidence.failed_postconditions.Length
+                != expectedFailedPostconditions.Length)
+            {
+                return Fail(name, "Scene lifecycle failed-condition count changed.");
+            }
+            for (int index = 0;
+                index < expectedFailedPostconditions.Length;
+                index++)
+            {
+                if (evidence.failed_postconditions[index]
+                    != expectedFailedPostconditions[index])
+                {
+                    return Fail(
+                        name,
+                        $"Failed condition {index} changed: "
+                        + $"expected={expectedFailedPostconditions[index]}, "
+                        + $"actual={evidence.failed_postconditions[index]}.");
+                }
+            }
+
+            error = AssertInspectorSceneSnapshot(
+                name,
+                expectedBefore,
+                evidence.before);
+            if (error != null) return error;
+            return AssertInspectorSceneSnapshot(
+                name,
+                expectedAfter,
+                evidence.after);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneBorrowedClean.unity";
+            CreateInspectorSceneFixture(
+                "InspectorSceneBorrowedClean.unity",
+                false);
+            Scene opened = EditorSceneManager.OpenScene(
+                targetPath,
+                OpenSceneMode.Single);
+            Scene target = RequireLoadedInspectorScene(targetPath);
+            if (target.handle != opened.handle)
+            {
+                return Fail(
+                    name,
+                    "Single-open and path-resolved target handles did not match.");
+            }
+            if (SceneManager.sceneCount != 1)
+            {
+                return Fail(
+                    name,
+                    $"Expected exactly one loaded Scene, got {SceneManager.sceneCount}.");
+            }
+            Scene onlyLoaded = SceneManager.GetSceneAt(0);
+            if (!onlyLoaded.isLoaded
+                || onlyLoaded.handle != target.handle
+                || !string.Equals(
+                    onlyLoaded.path.Replace('\\', '/'),
+                    targetPath,
+                    StringComparison.Ordinal)
+                || SceneManager.GetActiveScene().handle != target.handle)
+            {
+                return Fail(
+                    name,
+                    "The borrowed clean target was not the sole loaded active Scene.");
+            }
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    "InspectorSceneTarget/BoxCollider",
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error =
+                AssertInspectorSurfaceSuccess(name, response);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (!InspectorSceneIsLoaded(targetPath))
+                return Fail(name, "Borrowed target Scene was removed.");
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneBorrowedDirty.unity";
+            Scene target = CreateInspectorSceneFixture(
+                "InspectorSceneBorrowedDirty.unity",
+                true);
+            if (!SceneManager.SetActiveScene(target))
+                return Fail(name, "Could not make the dirty target Scene active.");
+            if (!EditorSceneManager.MarkSceneDirty(target))
+                return Fail(name, "Could not mark the target Scene dirty.");
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    "InspectorSceneTarget/BoxCollider",
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error = AssertInspectorLifecycleFailure(
+                name,
+                response,
+                "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY",
+                targetPath,
+                "The loaded Scene has unsaved changes; save or discard them before inspecting its last-saved serialized surface.",
+                "none",
+                new[] { target.handle },
+                false,
+                "not_attempted",
+                false,
+                "not_attempted",
+                Array.Empty<string>(),
+                before,
+                before);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (!InspectorSceneIsLoaded(targetPath))
+                return Fail(name, "Dirty borrowed target Scene was removed.");
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneOwned.unity";
+            Scene baseline = CreateInspectorSceneFixture(
+                "InspectorSceneOwnedBaseline.unity",
+                true);
+            CreateInspectorSceneFixture("InspectorSceneOwned.unity", false);
+            if (!SceneManager.SetActiveScene(baseline))
+                return Fail(name, "Could not make the clean baseline Scene active.");
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    "InspectorSceneTarget/BoxCollider",
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error =
+                AssertInspectorSurfaceSuccess(name, response);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (InspectorSceneIsLoaded(targetPath))
+                return Fail(name, "Owned target Scene remained loaded.");
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneDirtyUnrelatedTarget.unity";
+            CreateInspectorSceneFixture(
+                "InspectorSceneDirtyUnrelatedTarget.unity",
+                false);
+            Scene unrelated = CreateInspectorSceneFixture(
+                "InspectorSceneDirtyUnrelatedActive.unity",
+                true);
+            if (!SceneManager.SetActiveScene(unrelated))
+                return Fail(name, "Could not make the unrelated Scene active.");
+            if (!EditorSceneManager.MarkSceneDirty(unrelated))
+                return Fail(name, "Could not mark the unrelated Scene dirty.");
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    "InspectorSceneTarget/BoxCollider",
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error =
+                AssertInspectorSurfaceSuccess(name, response);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (InspectorSceneIsLoaded(targetPath)
+                || !InspectorSceneIsLoaded(unrelated.path))
+            {
+                return Fail(name, "Owned target cleanup or unrelated Scene presence changed.");
+            }
+            if (!unrelated.isDirty
+                || SceneManager.GetActiveScene().handle != unrelated.handle)
+            {
+                return Fail(name, "Unrelated active dirty Scene was not preserved.");
+            }
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneMultiTarget.unity";
+            Scene target = CreateInspectorSceneFixture(
+                "InspectorSceneMultiTarget.unity",
+                true);
+            Scene firstOther = CreateInspectorSceneFixture(
+                "InspectorSceneMultiFirst.unity",
+                true);
+            Scene activeOther = CreateInspectorSceneFixture(
+                "InspectorSceneMultiActive.unity",
+                true);
+            if (!SceneManager.SetActiveScene(activeOther))
+                return Fail(name, "Could not make the unrelated Scene active.");
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    "InspectorSceneTarget/BoxCollider",
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error =
+                AssertInspectorSurfaceSuccess(name, response);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (!InspectorSceneIsLoaded(targetPath)
+                || !InspectorSceneIsLoaded(firstOther.path)
+                || !InspectorSceneIsLoaded(activeOther.path))
+            {
+                return Fail(name, "A loaded Scene was removed during borrowed inspection.");
+            }
+            if (SceneManager.GetActiveScene().handle != activeOther.handle
+                || target.handle == activeOther.handle)
+            {
+                return Fail(name, "The non-active borrowed target changed active identity.");
+            }
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneMissingTarget.unity";
+            const string requestedSymbolPath = "MissingTarget/BoxCollider";
+            Scene baseline = CreateInspectorSceneFixture(
+                "InspectorSceneMissingTargetBaseline.unity",
+                true);
+            CreateInspectorSceneFixture(
+                "InspectorSceneMissingTarget.unity",
+                false);
+            if (!SceneManager.SetActiveScene(baseline))
+                return Fail(name, "Could not make the baseline Scene active.");
+
+            InspectorSceneLifecycle.Snapshot before =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+            EditorControlResponseReadback response =
+                RunInspectorSceneOperation(
+                    targetPath,
+                    requestedSymbolPath,
+                    out int warningCount);
+            InspectorSceneLifecycle.Snapshot after =
+                UnityEditorControlBridge.InspectorCaptureSnapshot();
+
+            TestCaseResult error = AssertInspectorSimpleFailure(
+                name,
+                response,
+                "EDITOR_CTRL_INSPECTOR_TARGET_NOT_FOUND",
+                "The requested serialized target was not found.",
+                0);
+            if (error != null) return error;
+            error = AssertInspectorSceneSnapshot(name, before, after);
+            if (error != null) return error;
+            if (InspectorSceneIsLoaded(targetPath))
+                return Fail(name, "Owned not-found target Scene remained loaded.");
+            error = AssertInspectorWarningCount(name, warningCount);
+            return error ?? Pass(name);
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneCloseFailure.unity";
+            Scene baseline = CreateInspectorSceneFixture(
+                "InspectorSceneCloseFailureBaseline.unity",
+                true);
+            CreateInspectorSceneFixture(
+                "InspectorSceneCloseFailure.unity",
+                false);
+            if (!SceneManager.SetActiveScene(baseline))
+                return Fail(name, "Could not make the baseline Scene active.");
+
+            Func<Scene, bool, bool> capturedCloseScene =
+                UnityEditorControlBridge.InspectorCloseScene;
+            Func<Scene, bool> capturedSetActiveScene =
+                UnityEditorControlBridge.InspectorSetActiveScene;
+            Func<InspectorSceneLifecycle.Snapshot> capturedSnapshot =
+                UnityEditorControlBridge.InspectorCaptureSnapshot;
+            InspectorSceneLifecycle.Snapshot before = capturedSnapshot();
+            int closeCalls = 0;
+            try
+            {
+                UnityEditorControlBridge.InspectorCloseScene =
+                    (scene, removeScene) =>
+                    {
+                        closeCalls++;
+                        return false;
+                    };
+
+                EditorControlResponseReadback response =
+                    RunInspectorSceneOperation(
+                        targetPath,
+                        "InspectorSceneTarget/BoxCollider",
+                        out int warningCount);
+                InspectorSceneLifecycle.Snapshot after = capturedSnapshot();
+                Scene leakedTarget = SceneManager.GetSceneByPath(targetPath);
+                InspectorSceneLifecycle.Snapshot expectedAfter =
+                    BuildInspectorSnapshotWithAdditionalScene(
+                        before,
+                        leakedTarget);
+
+                TestCaseResult error = AssertInspectorLifecycleFailure(
+                    name,
+                    response,
+                    "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                    targetPath,
+                    "Scene inspection could not restore the Editor Scene state.",
+                    "owned",
+                    Array.Empty<int>(),
+                    true,
+                    "failed",
+                    false,
+                    "not_attempted",
+                    new[]
+                    {
+                        "startup_scene_order",
+                        "owned_close_failed",
+                        "owned_scene_present",
+                    },
+                    before,
+                    expectedAfter);
+                if (error != null) return error;
+                error = AssertInspectorSceneSnapshot(
+                    name,
+                    expectedAfter,
+                    after);
+                if (error != null) return error;
+                if (!InspectorSceneIsLoaded(targetPath) || closeCalls != 1)
+                    return Fail(name, "Injected CloseScene=false was not observed exactly once.");
+                error = AssertInspectorWarningCount(name, warningCount);
+                return error ?? Pass(name);
+            }
+            finally
+            {
+                UnityEditorControlBridge.InspectorCloseScene = capturedCloseScene;
+                UnityEditorControlBridge.InspectorSetActiveScene = capturedSetActiveScene;
+                UnityEditorControlBridge.InspectorCaptureSnapshot = capturedSnapshot;
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure";
+            const string targetPath =
+                TestAssetDir + "/InspectorSceneActiveRestoreFailure.unity";
+            Scene baseline = CreateInspectorSceneFixture(
+                "InspectorSceneActiveRestoreBaseline.unity",
+                true);
+            Scene alternate = CreateInspectorSceneFixture(
+                "InspectorSceneActiveRestoreAlternate.unity",
+                true);
+            CreateInspectorSceneFixture(
+                "InspectorSceneActiveRestoreFailure.unity",
+                false);
+            if (!SceneManager.SetActiveScene(baseline))
+                return Fail(name, "Could not make the baseline Scene active.");
+
+            Func<Scene, bool, bool> capturedCloseScene =
+                UnityEditorControlBridge.InspectorCloseScene;
+            Func<Scene, bool> capturedSetActiveScene =
+                UnityEditorControlBridge.InspectorSetActiveScene;
+            Func<InspectorSceneLifecycle.Snapshot> capturedSnapshot =
+                UnityEditorControlBridge.InspectorCaptureSnapshot;
+            InspectorSceneLifecycle.Snapshot before = capturedSnapshot();
+            int restoreCalls = 0;
+            bool forcedActiveSucceeded = false;
+            try
+            {
+                UnityEditorControlBridge.InspectorCloseScene =
+                    (scene, removeScene) =>
+                    {
+                        forcedActiveSucceeded =
+                            SceneManager.SetActiveScene(alternate);
+                        return capturedCloseScene(scene, removeScene);
+                    };
+                UnityEditorControlBridge.InspectorSetActiveScene =
+                    scene =>
+                    {
+                        restoreCalls++;
+                        return false;
+                    };
+
+                EditorControlResponseReadback response =
+                    RunInspectorSceneOperation(
+                        targetPath,
+                        "InspectorSceneTarget/BoxCollider",
+                        out int warningCount);
+                InspectorSceneLifecycle.Snapshot after = capturedSnapshot();
+                InspectorSceneLifecycle.Snapshot expectedAfter =
+                    BuildInspectorSnapshotWithActiveScene(before, alternate);
+
+                TestCaseResult error = AssertInspectorLifecycleFailure(
+                    name,
+                    response,
+                    "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                    targetPath,
+                    "Scene inspection could not restore the Editor Scene state.",
+                    "owned",
+                    Array.Empty<int>(),
+                    true,
+                    "succeeded",
+                    true,
+                    "failed",
+                    new[] { "active_scene", "active_scene_restore_failed" },
+                    before,
+                    expectedAfter);
+                if (error != null) return error;
+                error = AssertInspectorSceneSnapshot(
+                    name,
+                    expectedAfter,
+                    after);
+                if (error != null) return error;
+                if (InspectorSceneIsLoaded(targetPath)
+                    || !forcedActiveSucceeded
+                    || restoreCalls != 1)
+                {
+                    return Fail(
+                        name,
+                        "Injected active restoration failure was not observed exactly.");
+                }
+                error = AssertInspectorWarningCount(name, warningCount);
+                return error ?? Pass(name);
+            }
+            finally
+            {
+                UnityEditorControlBridge.InspectorCloseScene = capturedCloseScene;
+                UnityEditorControlBridge.InspectorSetActiveScene = capturedSetActiveScene;
+                UnityEditorControlBridge.InspectorCaptureSnapshot = capturedSnapshot;
+            }
+        }
+
+        private static TestCaseResult Test_EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure(
+            string prefabPath,
+            string materialPath)
+        {
+            const string name =
+                "EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure";
+            const string targetPath =
+                TestAssetDir + "/InspectorScenePostconditionFailure.unity";
+            Scene baseline = CreateInspectorSceneFixture(
+                "InspectorScenePostconditionBaseline.unity",
+                true);
+            CreateInspectorSceneFixture(
+                "InspectorScenePostconditionFailure.unity",
+                false);
+            if (!SceneManager.SetActiveScene(baseline))
+                return Fail(name, "Could not make the baseline Scene active.");
+
+            Func<Scene, bool, bool> capturedCloseScene =
+                UnityEditorControlBridge.InspectorCloseScene;
+            Func<Scene, bool> capturedSetActiveScene =
+                UnityEditorControlBridge.InspectorSetActiveScene;
+            Func<InspectorSceneLifecycle.Snapshot> capturedSnapshot =
+                UnityEditorControlBridge.InspectorCaptureSnapshot;
+            InspectorSceneLifecycle.Snapshot before = capturedSnapshot();
+            InspectorSceneLifecycle.Snapshot injectedAfter =
+                BuildInspectorSnapshotWithDirtyMismatch(before);
+            int snapshotCalls = 0;
+            try
+            {
+                UnityEditorControlBridge.InspectorCaptureSnapshot =
+                    () =>
+                    {
+                        snapshotCalls++;
+                        InspectorSceneLifecycle.Snapshot actual =
+                            capturedSnapshot();
+                        return snapshotCalls == 2 ? injectedAfter : actual;
+                    };
+
+                EditorControlResponseReadback response =
+                    RunInspectorSceneOperation(
+                        targetPath,
+                        "InspectorSceneTarget/BoxCollider",
+                        out int warningCount);
+                InspectorSceneLifecycle.Snapshot after = capturedSnapshot();
+
+                TestCaseResult error = AssertInspectorLifecycleFailure(
+                    name,
+                    response,
+                    "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                    targetPath,
+                    "Scene inspection could not restore the Editor Scene state.",
+                    "owned",
+                    Array.Empty<int>(),
+                    true,
+                    "succeeded",
+                    false,
+                    "not_attempted",
+                    new[] { "startup_scene_dirty_state" },
+                    before,
+                    injectedAfter);
+                if (error != null) return error;
+                error = AssertInspectorSceneSnapshot(name, before, after);
+                if (error != null) return error;
+                if (InspectorSceneIsLoaded(targetPath) || snapshotCalls != 2)
+                {
+                    return Fail(
+                        name,
+                        "Injected after-snapshot mismatch was not observed exactly once.");
+                }
+                error = AssertInspectorWarningCount(name, warningCount);
+                return error ?? Pass(name);
+            }
+            finally
+            {
+                UnityEditorControlBridge.InspectorCloseScene = capturedCloseScene;
+                UnityEditorControlBridge.InspectorSetActiveScene = capturedSetActiveScene;
+                UnityEditorControlBridge.InspectorCaptureSnapshot = capturedSnapshot;
+            }
         }
 
         private static bool LiveUnityProbeEnabled()

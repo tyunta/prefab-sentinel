@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Breaking runtime migration (Issue #167): the historical `patch_apply(runtime_scene=...)` shortcut and implicit runtime profile are no longer supported. Call `validate_runtime` with an explicit profile: `editor_console_only` is read-only; `compile_only` / `clientsim` require `confirm=True`, a non-empty `change_reason`, and an `out_report` inside the project but outside `Assets/`. See [the runtime contract](./docs/execution-reference.md#unity-bridge--runtime).
+- Local Unity Bridge acceptance (Issue #186) provides an explicit `--confirm-live` workflow for source/preflight, safe deployment, compile/reload evidence, smoke checks, and bounded fixture cleanup, with a project-contained terminal report and recovery-only support.
+- Safe Bridge deployment (#193, #186) stages and byte-verifies the complete bundle, then promotes an existing target through private `promote_bridge_bundle` under a balanced Unity refresh barrier. Responses expose verified `manifest_sha256` / `bridge_version`, not compilation success. Older nonempty targets fail closed with `DEPLOY_BARRIER_UNAVAILABLE` and require a separately recorded one-time bootstrap.
+- Existing-target promotion and rollback import the added / removed source inventory with `AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport)` while the refresh barrier is held. Releases that change source filenames require a refresh-aware same-layout bootstrap first, because the handler active at deployment start owns promotion (Issue #213).
+
+### Fixed
+
+- Editor Bridge の Watch Directory / Enabled 設定を Unity project ごとに分離し、同時起動した別 project の設定を再起動時に継承しないようにした。自動生成される instance ID は `SessionState` で managed reload をまたいで維持し、project/watch/instance の接続情報、WSL / Bash・PowerShell 用 Codex 起動 command を Bridge window からコピーできる。
+- dirty asset 判定を Unity native serialized asset に限定し、保存・再起動でディスク内容が変わらない imported `.shader` オブジェクトを未保存変更として扱わないようにした。Editor status、compile audit、ClientSim 前後の3経路で同じ判定を使う。
+- 現在の project root / Bridge instance ID と一致する fresh 応答で観測した running Bridge version・ownership manifest・source manifest・target bytes が一致する `deploy_bridge` を `already_current` no-op とし、不要な target promotion / `AssetDatabase.Refresh` / domain reload で unrelated assets を dirty にしないようにした。running identity / version が未観測または不一致なら従来どおり private promotion barrier を必須とする。
+
 ## [0.9.1] - 2026-08-16
 
 ### Changed

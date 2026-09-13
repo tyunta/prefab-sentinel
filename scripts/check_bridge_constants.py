@@ -6,9 +6,10 @@ bridge side:
 1. Version strings — ``pyproject.toml``, ``.claude-plugin/plugin.json``,
    and the ``BridgeVersion`` literal in
    ``tools/unity/PrefabSentinel.UnityEditorControlBridge.cs``.
-2. Bridge protocol version integer — Python
-   ``prefab_sentinel.bridge_constants.PROTOCOL_VERSION`` vs the C#
-   ``ProtocolVersion`` literal.
+2. Common Editor Bridge file-IPC protocol version integer — Python
+   ``prefab_sentinel.bridge_constants.PROTOCOL_VERSION`` vs the canonical C#
+   ``UnityEditorControlBridge.ProtocolVersion`` literal. Runtime and patch
+   Bridge constants alias that C# authority.
 3. Severity vocabulary — Python
    ``prefab_sentinel.bridge_constants.VALID_SEVERITIES`` vs every string
    literal assigned to a ``severity`` field on the C# side.
@@ -51,6 +52,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 try:
     import tomllib  # Python 3.11+
@@ -78,6 +80,43 @@ _RE_CSHARP_CONSOLE_CAPACITY = re.compile(
 
 
 # ---------- Loader helpers (all return str/int/list or raise ``_LoadError``)
+
+_DEFAULT_WATCH_IDENTITY_CSHARP = (
+    _REPO_ROOT
+    / "tools"
+    / "unity"
+    / "PrefabSentinel.EditorBridge.WatchIdentity.cs"
+)
+_RE_CSHARP_MARKER_FILENAME = re.compile(
+    r'public\s+const\s+string\s+MarkerFileName\s*=\s*"([^"]+)"'
+)
+_RE_CSHARP_STATUS_RELATIVE_PATH = re.compile(
+    r'public\s+const\s+string\s+StatusRelativePath\s*=\s*"([^"]+)"'
+)
+_RE_CSHARP_STATUS_SCHEMA_VERSION = re.compile(
+    r"public\s+const\s+int\s+SchemaVersion\s*=\s*(\d+)"
+)
+_RE_CSHARP_STATUS_MAX_BYTES = re.compile(
+    r"public\s+const\s+int\s+StatusMaxBytes\s*=\s*(\d+)"
+)
+_RE_CSHARP_HEARTBEAT_INTERVAL_MS = re.compile(
+    r"public\s+const\s+int\s+HeartbeatIntervalMilliseconds\s*=\s*(\d+)"
+)
+_EXPECTED_CSHARP_HEARTBEAT_INTERVAL_MS = 1000
+_EXPECTED_PYTHON_FRESHNESS_MS = 5000
+
+
+class _CSharpConstants(TypedDict):
+    bridge_version: str
+    protocol_version: int
+    severities: set[str]
+    console_capacity: int
+    marker_filename: str
+    status_relative_path: str
+    status_schema_version: int
+    status_max_bytes: int
+    heartbeat_interval_ms: int
+
 
 class _LoadError(Exception):
     """Raised when an input file cannot be loaded or parsed."""
@@ -114,12 +153,22 @@ def _load_plugin_version(path: Path = _DEFAULT_PLUGIN_JSON) -> str:
     return version
 
 
-def _load_csharp_constants(path: Path = _DEFAULT_CSHARP) -> dict[str, object]:
-    """Return ``{"bridge_version": str, "protocol_version": int, "severities": set[str]}``."""
+def _load_csharp_constants(
+    path: Path = _DEFAULT_CSHARP,
+    watch_identity_path: Path = _DEFAULT_WATCH_IDENTITY_CSHARP,
+) -> _CSharpConstants:
+    """Load constants from the main Bridge and Unity-free identity helper."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise _LoadError(f"cannot read C# bridge source: {exc}") from exc
+    try:
+        watch_identity_text = watch_identity_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _LoadError(
+            f"cannot read C# watch identity source: {exc}"
+        ) from exc
+
     bridge_match = _RE_CSHARP_BRIDGE_VERSION.search(text)
     if not bridge_match:
         raise _LoadError("C# bridge source: BridgeVersion literal not found")
@@ -134,11 +183,33 @@ def _load_csharp_constants(path: Path = _DEFAULT_CSHARP) -> dict[str, object]:
         raise _LoadError(
             "C# bridge source: ConsoleLogBuffer.DefaultCapacity literal not found"
         )
+
+    watch_patterns = {
+        "marker_filename": _RE_CSHARP_MARKER_FILENAME,
+        "status_relative_path": _RE_CSHARP_STATUS_RELATIVE_PATH,
+        "status_schema_version": _RE_CSHARP_STATUS_SCHEMA_VERSION,
+        "status_max_bytes": _RE_CSHARP_STATUS_MAX_BYTES,
+        "heartbeat_interval_ms": _RE_CSHARP_HEARTBEAT_INTERVAL_MS,
+    }
+    watch_values: dict[str, str] = {}
+    for name, pattern in watch_patterns.items():
+        match = pattern.search(watch_identity_text)
+        if match is None:
+            raise _LoadError(
+                f"C# watch identity source: {name} literal not found"
+            )
+        watch_values[name] = match.group(1)
+
     return {
         "bridge_version": bridge_match.group(1),
         "protocol_version": int(proto_match.group(1)),
         "severities": severities,
         "console_capacity": int(capacity_match.group(1)),
+        "marker_filename": watch_values["marker_filename"],
+        "status_relative_path": watch_values["status_relative_path"],
+        "status_schema_version": int(watch_values["status_schema_version"]),
+        "status_max_bytes": int(watch_values["status_max_bytes"]),
+        "heartbeat_interval_ms": int(watch_values["heartbeat_interval_ms"]),
     }
 
 
@@ -179,6 +250,57 @@ def _check_console_capacity(py_capacity: int, cs_capacity: int) -> list[str]:
     ]
 
 
+def _check_watch_identity_constants(
+    py_marker_filename: str,
+    py_status_relative_path: str,
+    py_schema_version: int,
+    py_status_max_bytes: int,
+    py_freshness_ms: int,
+    cs: _CSharpConstants,
+) -> list[str]:
+    """Return shared-artifact drift plus each language-owned boundary drift."""
+    shared = {
+        "marker filename": (
+            py_marker_filename,
+            cs["marker_filename"],
+        ),
+        "status relative path": (
+            py_status_relative_path,
+            cs["status_relative_path"],
+        ),
+        "status schema version": (
+            py_schema_version,
+            cs["status_schema_version"],
+        ),
+        "status max bytes": (
+            py_status_max_bytes,
+            cs["status_max_bytes"],
+        ),
+    }
+    drifts = [
+        f"watch identity {name} drift: "
+        f"Python={python_value!r} vs C#={csharp_value!r}"
+        for name, (python_value, csharp_value) in shared.items()
+        if python_value != csharp_value
+    ]
+
+    csharp_heartbeat = cs["heartbeat_interval_ms"]
+    if csharp_heartbeat != _EXPECTED_CSHARP_HEARTBEAT_INTERVAL_MS:
+        drifts.append(
+            "watch identity heartbeat drift: "
+            f"C# HeartbeatIntervalMilliseconds={csharp_heartbeat} vs "
+            f"owned value={_EXPECTED_CSHARP_HEARTBEAT_INTERVAL_MS}"
+        )
+    if py_freshness_ms != _EXPECTED_PYTHON_FRESHNESS_MS:
+        drifts.append(
+            "watch identity freshness drift: "
+            f"Python BRIDGE_STATUS_FRESHNESS_MS={py_freshness_ms} vs "
+            f"owned value={_EXPECTED_PYTHON_FRESHNESS_MS}"
+        )
+
+    return drifts
+
+
 def _check_severities(py_severities: set[str], cs_severities: set[str]) -> list[str]:
     """Return a list of drift messages naming 'severity' (empty when aligned).
 
@@ -200,20 +322,25 @@ def _check_severities(py_severities: set[str], cs_severities: set[str]) -> list[
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Drift-check entry point.
+    """Drift-check all shared and language-owned Bridge constants.
 
-    ``argv`` is accepted for parity with other script entry points but is
-    currently ignored (no flags).  Returns 0 on clean, 1 on drift, 2 on
+    argv is accepted for parity with other script entry points but is
+    currently ignored (no flags). Returns 0 on clean, 1 on drift, and 2 on
     input load failure.
     """
     del argv  # unused; kept for interface parity
 
-    # Python-side constants (import lazily so _LoadError isn't mingled with
-    # ImportError — a failed import here is a bug in the repo, not drift).
     from prefab_sentinel.bridge_constants import (
         CONSOLE_LOG_BUFFER_MAX_ENTRIES as PY_CONSOLE_CAPACITY,
         PROTOCOL_VERSION as PY_PROTOCOL_VERSION,
         VALID_SEVERITIES as PY_VALID_SEVERITIES,
+    )
+    from prefab_sentinel.bridge_watch_identity import (
+        BRIDGE_STATUS_FRESHNESS_MS as PY_STATUS_FRESHNESS_MS,
+        BRIDGE_STATUS_MAX_BYTES as PY_STATUS_MAX_BYTES,
+        BRIDGE_STATUS_RELATIVE_PATH as PY_STATUS_RELATIVE_PATH,
+        BRIDGE_STATUS_SCHEMA_VERSION as PY_STATUS_SCHEMA_VERSION,
+        WATCH_IDENTITY_MARKER_FILENAME as PY_MARKER_FILENAME,
     )
 
     try:
@@ -221,16 +348,48 @@ def main(argv: list[str] | None = None) -> int:
         plugin_version = _load_plugin_version()
         cs = _load_csharp_constants()
     except _LoadError as exc:
-        print(f"check_bridge_constants: input load failure: {exc}", file=sys.stderr)
+        print(
+            f"check_bridge_constants: input load failure: {exc}",
+            file=sys.stderr,
+        )
         return 2
 
     drifts: list[str] = []
-    drifts.extend(_check_versions(py_version, plugin_version, str(cs["bridge_version"])))
-    drifts.extend(_check_protocol(int(PY_PROTOCOL_VERSION), int(cs["protocol_version"])))
-    drifts.extend(_check_severities(set(PY_VALID_SEVERITIES), set(cs["severities"])))  # type: ignore[arg-type]
-    drifts.extend(_check_console_capacity(
-        int(PY_CONSOLE_CAPACITY), int(cs["console_capacity"]),  # type: ignore[arg-type]
-    ))
+    drifts.extend(
+        _check_versions(
+            py_version,
+            plugin_version,
+            cs["bridge_version"],
+        )
+    )
+    drifts.extend(
+        _check_protocol(
+            int(PY_PROTOCOL_VERSION),
+            cs["protocol_version"],
+        )
+    )
+    drifts.extend(
+        _check_severities(
+            set(PY_VALID_SEVERITIES),
+            cs["severities"],
+        )
+    )
+    drifts.extend(
+        _check_console_capacity(
+            int(PY_CONSOLE_CAPACITY),
+            cs["console_capacity"],
+        )
+    )
+    drifts.extend(
+        _check_watch_identity_constants(
+            PY_MARKER_FILENAME,
+            PY_STATUS_RELATIVE_PATH.as_posix(),
+            PY_STATUS_SCHEMA_VERSION,
+            PY_STATUS_MAX_BYTES,
+            PY_STATUS_FRESHNESS_MS,
+            cs,
+        )
+    )
 
     if drifts:
         print("check_bridge_constants: drift detected", file=sys.stderr)

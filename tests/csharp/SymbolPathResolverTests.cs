@@ -160,4 +160,39 @@ public class SymbolPathResolverTests
         Assert.Null(result.Node);
         Assert.Equal(2, result.MatchCount);
     }
+
+    [Fact]
+    public void Acceptance_Scene_Shape_Rejects_Bare_And_Resolves_Indexed_Child()
+    {
+        var duplicateChildren = new[]
+        {
+            new SymbolPathNode(
+                "first",
+                "AcceptanceDuplicate",
+                Array.Empty<SymbolPathNode>()),
+            new SymbolPathNode(
+                "second",
+                "AcceptanceDuplicate",
+                Array.Empty<SymbolPathNode>()),
+        };
+        var roots = new[]
+        {
+            new SymbolPathNode(
+                "parent",
+                "AcceptanceDuplicateParent",
+                duplicateChildren),
+        };
+
+        SymbolPathResolution ambiguous = SymbolPathResolver.Resolve(
+            roots,
+            new[] { "AcceptanceDuplicateParent", "AcceptanceDuplicate" });
+        SymbolPathResolution exact = SymbolPathResolver.Resolve(
+            roots,
+            new[] { "AcceptanceDuplicateParent", "AcceptanceDuplicate#0" });
+
+        Assert.Equal(SymbolPathOutcome.Ambiguous, ambiguous.Outcome);
+        Assert.Equal(2, ambiguous.MatchCount);
+        Assert.Equal(SymbolPathOutcome.Unique, exact.Outcome);
+        Assert.Equal("first", exact.Node!.Id);
+    }
 }

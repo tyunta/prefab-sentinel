@@ -46,6 +46,24 @@
     that flattens into a ``Bridge\`` virtual folder).
   -->
   <ItemGroup>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.EditorBridge.TerminalFailureBoundary.cs">
+      <Link>Bridge\PrefabSentinel.EditorBridge.TerminalFailureBoundary.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.EditorBridge.ResponsePublisher.cs">
+      <Link>Bridge\PrefabSentinel.EditorBridge.ResponsePublisher.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.EditorBridge.Setup.cs">
+      <Link>Bridge\PrefabSentinel.EditorBridge.Setup.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.EditorBridge.WatchIdentity.cs">
+      <Link>Bridge\PrefabSentinel.EditorBridge.WatchIdentity.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.EditorBridge.WatchIdentity.Artifacts.cs">
+      <Link>Bridge\PrefabSentinel.EditorBridge.WatchIdentity.Artifacts.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.VRCSDKUploadFailureBoundary.cs">
+      <Link>Bridge\PrefabSentinel.VRCSDKUploadFailureBoundary.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs">
       <Link>Bridge\PrefabSentinel.Screenshot.ViewAllowlistClassifier.cs</Link>
     </Compile>
@@ -114,6 +132,12 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.JsonArrayScalarParser.cs">
       <Link>Bridge\PrefabSentinel.JsonArrayScalarParser.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.JsonSyntaxReader.cs">
+      <Link>Bridge\PrefabSentinel.JsonSyntaxReader.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompletionShape.cs">
+      <Link>Bridge\PrefabSentinel.RunScriptCompletionShape.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Geometry.BoundsMath.cs">
       <Link>Bridge\PrefabSentinel.Geometry.BoundsMath.cs</Link>
     </Compile>
@@ -126,11 +150,23 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.Dispatch.EditorControlRequest.cs">
       <Link>Bridge\PrefabSentinel.Dispatch.EditorControlRequest.cs</Link>
     </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.UnityAcceptanceRequest.cs">
+      <Link>Bridge\PrefabSentinel.UnityAcceptanceRequest.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.UnityAcceptanceCaseFailure.cs">
+      <Link>Bridge\PrefabSentinel.UnityAcceptanceCaseFailure.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.UnityAcceptanceLease.cs">
+      <Link>Bridge\PrefabSentinel.UnityAcceptanceLease.cs</Link>
+    </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs">
       <Link>Bridge\PrefabSentinel.Prefab.ApplyRejectionEnvelope.cs</Link>
     </Compile>
     <Compile Include="..\..\tools\unity\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs">
       <Link>Bridge\PrefabSentinel.PrefabStage.StageHierarchyPathLogic.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.InspectorSceneLifecycle.cs">
+      <Link>Bridge\PrefabSentinel.InspectorSceneLifecycle.cs</Link>
     </Compile>
     <!--
       Issue #38 / #45: the #N-disambiguating symbol-path resolver and the
@@ -143,6 +179,47 @@
     <Compile Include="..\..\tools\unity\PrefabSentinel.RunScriptCompile.ImporterErrorClassifier.cs">
       <Link>Bridge\PrefabSentinel.RunScriptCompile.ImporterErrorClassifier.cs</Link>
     </Compile>
+    <Compile Include="..\\..\\tools\\unity\\PrefabSentinel.RuntimeValidation.CompileAudit.cs">
+      <Link>Bridge\\PrefabSentinel.RuntimeValidation.CompileAudit.cs</Link>
+    </Compile>
+    <Compile Include="..\\..\\tools\\unity\\PrefabSentinel.RuntimeValidation.CompileInventory.cs">
+      <Link>Bridge\\PrefabSentinel.RuntimeValidation.CompileInventory.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.RuntimeValidation.TransactionOrder.cs">
+      <Link>Bridge\PrefabSentinel.RuntimeValidation.TransactionOrder.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.BridgeDeployPromotionEvidence.cs">
+      <Link>Bridge\PrefabSentinel.BridgeDeployPromotionEvidence.cs</Link>
+    </Compile>
+    <Compile Include="..\..\tools\unity\PrefabSentinel.UnityEditorControlBridge.BridgeDeploy.cs">
+      <Link>Bridge\PrefabSentinel.UnityEditorControlBridge.BridgeDeploy.cs</Link>
+    </Compile>
   </ItemGroup>
+
+  <!--
+    Issue #214: Unity does not inherit this harness's Nullable=enable.
+    Compile the same linked Bridge sources with the default context disabled
+    so missing file-local annotation context cannot hide behind the harness.
+    Keep the normal nullable-enabled build and its analysis unchanged.
+    CS0649 is excluded only here: DTO consumers that assign these fields are
+    intentionally absent from this auxiliary compilation, not from the tests.
+  -->
+  <Target Name="CheckBridgeNullableContext" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <_BridgeNullableSources Include="@(Compile)" Condition="'%(Compile.Link)' != ''" />
+    </ItemGroup>
+    <Error Condition="'@(_BridgeNullableSources)' == ''"
+           Text="Bridge nullable context check requires linked Bridge sources." />
+    <Csc Sources="@(_BridgeNullableSources)"
+         References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(IntermediateOutputPath)PrefabSentinel.BridgeNullableCheck.dll"
+         TargetType="Library"
+         NoStandardLib="true"
+         NoConfig="true"
+         Nullable="disable"
+         LangVersion="$(LangVersion)"
+         DisabledWarnings="CS0649"
+         WarningsAsErrors="CS8632" />
+  </Target>
 
 </Project>

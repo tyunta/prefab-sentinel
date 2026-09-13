@@ -94,7 +94,9 @@ internal static class AssetOpsPathValidation
         bool requireDestinationStem,
         string field)
     {
-        if (string.IsNullOrEmpty(assetPath))
+        // Unity's .NET Framework reference API lacks IsNullOrEmpty's nullable
+        // postcondition. Keep the null guard explicit for both compiler targets.
+        if (assetPath is null || assetPath.Length == 0)
         {
             return AssetOpsPathValidationResult.Invalid(
                 invalidCode,

@@ -69,6 +69,18 @@ class TestCiWorkflowShaPin(unittest.TestCase):
                 f"`uses: <action>@<40-char-sha> # <tag>`.",
             )
 
+    def test_both_evidence_uploads_pin_node24_revision(self) -> None:
+        text = _strip_yaml_comments(_CI_PATH.read_text(encoding="utf-8"))
+        uploads = re.findall(r"uses:\s*actions/upload-artifact@(\S+)", text)
+        # Official v7.0.1 action.yml declares runs.using=node24.
+        self.assertEqual(
+            [
+                "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+                "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            ],
+            uploads,
+        )
+
 
 class TestCsharpTestsWorkflowDispatchFallback(unittest.TestCase):
     """The csharp-tests job's ``if:`` clause must carry a
@@ -184,7 +196,7 @@ class TestPerformanceBenchmarkWorkflow(unittest.TestCase):
             "if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'" in body,
             "scripts/run_performance_benchmarks.py" in body and "--enforce" in body,
             "--baseline-ref" not in body and "--baseline-out" not in body,
-            "uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in body,
+            "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in body,
             "if: always()" in body and "path: performance-report.json" in body,
             tuple(token in body for token in ("git add", "git commit", "git push")),
         )

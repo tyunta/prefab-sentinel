@@ -9,6 +9,7 @@ from prefab_sentinel.asset_delete import (
     build_delete_plan,
     compute_broken_reference_delta,
 )
+from prefab_sentinel.bridge_response import is_bridge_response_envelope
 from prefab_sentinel.contracts import Diagnostic, Severity, ToolResponse, error_response
 from prefab_sentinel.editor_bridge import send_action
 
@@ -60,9 +61,33 @@ def delete_assets(
         confirm=True,
         change_reason=change_reason,
     )
-    bridge_data = _dict_value(bridge_response.get("data"))
-    deleted_paths = list(bridge_data.get("deleted_paths") or [])
-    failed_paths = list(bridge_data.get("failed_paths") or [])
+    if not is_bridge_response_envelope(bridge_response):
+        return error_response(
+            "ASSET_DELETE_RESPONSE_SCHEMA",
+            "delete_assets returned an invalid response envelope.",
+            data={"plan": plan_data},
+        )
+    if bridge_response["success"] is False:
+        return _bridge_failure_response(bridge_response, plan_data)
+
+    bridge_data = bridge_response["data"]
+    deleted_paths_value = bridge_data.get("deleted_paths")
+    failed_paths_value = bridge_data.get("failed_paths")
+    if (
+        bridge_response["code"] != "DELETE_ASSETS_OK"
+        or not isinstance(deleted_paths_value, list)
+        or not isinstance(failed_paths_value, list)
+        or not all(isinstance(path, str) for path in deleted_paths_value)
+        or not all(isinstance(path, str) for path in failed_paths_value)
+    ):
+        return error_response(
+            "ASSET_DELETE_RESPONSE_SCHEMA",
+            "delete_assets returned invalid path results.",
+            data={"plan": plan_data},
+        )
+
+    deleted_paths = list(deleted_paths_value)
+    failed_paths = list(failed_paths_value)
     if failed_paths:
         after_scan = _scan_after_delete(orch, scope=scope)
         after_scan_wire = after_scan.to_dict()
@@ -84,8 +109,6 @@ def delete_assets(
             "AssetDatabase.DeleteAssets reported failed paths.",
             data=data,
         )
-    if not bool(bridge_response.get("success")):
-        return _bridge_failure_response(bridge_response, plan_data)
 
     after_scan = _scan_after_delete(orch, scope=scope)
     if _is_failed_ref_scan(after_scan):

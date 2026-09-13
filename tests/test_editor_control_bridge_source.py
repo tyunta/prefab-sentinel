@@ -8,8 +8,10 @@ I3 (BatchObjectSpec.components field and attachment logic).
 
 from __future__ import annotations
 
+import ast
 import json
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -46,6 +48,7 @@ _BRIDGE_GLOB = "PrefabSentinel.UnityEditorControlBridge*.cs"
 EDITOR_BRIDGE: Path = TOOLS_DIR / "PrefabSentinel.EditorBridge.cs"
 EDITOR_CONTROL_REQUEST: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.EditorControlRequest.cs"
 ACTION_REGISTRY: Path = TOOLS_DIR / "PrefabSentinel.Dispatch.ActionRegistry.cs"
+BRIDGE_DEPLOY: Path = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.BridgeDeploy.cs"
 INPUT_VALIDATORS: Path = TOOLS_DIR / "PrefabSentinel.Properties.InputValidators.cs"
 EDITOR_SCRIPT_PATH_CLASSIFIER: Path = TOOLS_DIR / "PrefabSentinel.MenuScriptWatch.EditorScriptPathClassifier.cs"
 CONSOLE_REQUEST_VALIDATOR: Path = TOOLS_DIR / "PrefabSentinel.ConsoleCapture.RequestValidator.cs"
@@ -94,7 +97,7 @@ def _read(path: Path) -> str:
 def _extract_method(source: str, method_name: str) -> str:
     """Extract the full body of a named method from C# source (brace-counting)."""
     pattern = re.compile(
-        rf"(private|internal|public)\s+static\s+(?:async\s+)?\S+(?:\s*<[^>]+>)?\s+{re.escape(method_name)}(?:\s*<[^>]+>)?\s*\(",
+        rf"(private|internal|public)\s+static\s+(?:async\s+)?(?:partial\s+)?\S+(?:\s*<[^>]+>)?\s+{re.escape(method_name)}(?:\s*<[^>]+>)?\s*\(",
     )
     match = pattern.search(source)
     if not match:
@@ -560,6 +563,31 @@ class TestRunScriptShortPoll(unittest.TestCase):
                         "is detected and reported with real diagnostics."
                     ),
                 )
+
+
+    def test_run_script_shared_state_remains_in_run_script_partial(self) -> None:
+        source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.RunScriptCompile.cs"
+        )
+        acceptance = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Acceptance.cs"
+        )
+        declarations = (
+            "private const string RunScriptTempDir",
+            "private const string RunScriptTypeName",
+            "private const string RunScriptEntryPoint",
+            "private const int RunScriptCompileTimeoutMs",
+            "private const int RunScriptEntryTypeTimeoutMs",
+            "private const int RunScriptPollIntervalMs",
+            "RunScriptConsecutiveCompilePending =",
+            "private const int RunScriptStuckThreshold",
+            "private static DateTime LastDomainReloadUtc",
+            "private const float RecompileAndWaitDefaultTimeoutSec",
+        )
+        for declaration in declarations:
+            with self.subTest(declaration=declaration):
+                self.assertIn(declaration, source)
+                self.assertNotIn(declaration, acceptance)
 
     def test_assembly_mtime_machinery_absent_from_bridge_source(self) -> None:
         """Issue #64 — once the run-script poll stops reading assembly
@@ -2218,6 +2246,184 @@ class TestEditorBridgeWindowVersionLine(unittest.TestCase):
         )
 
 
+    def test_ongui_exposes_generated_instance_and_connection_copy_controls(self) -> None:
+        body = _extract_editor_bridge_ongui()
+        checks = {
+            "instance_label": '"Bridge Instance ID"' in body,
+            "instance_value": "UnityEditorControlBridge.CurrentBridgeInstanceId" in body,
+            "copy_instance": '"Copy Instance ID"' in body,
+            "copy_connection": '"Copy Connection Info"' in body,
+            "copy_bash": '"Copy Codex Command (WSL / Bash)"' in body,
+            "copy_powershell": '"Copy Codex Command (PowerShell)"' in body,
+            "clipboard": "EditorGUIUtility.systemCopyBuffer" in body,
+        }
+
+        self.assertEqual(
+            {name: True for name in checks},
+            checks,
+            msg=f"Editor Bridge connection-control checks={checks}",
+        )
+
+    def test_editor_prefs_are_scoped_to_the_current_project(self) -> None:
+        source = _strip_cs_comments(EDITOR_BRIDGE.read_text(encoding="utf-8"))
+        compact = re.sub(r"\s+", "", source)
+        checks = {
+            "watch_prefix": (
+                'privateconststringWatchDirPrefKeyPrefix='
+                '"PrefabSentinel_EditorBridge_WatchDir";'
+                in compact
+            ),
+            "enabled_prefix": (
+                'privateconststringEnabledPrefKeyPrefix='
+                '"PrefabSentinel_EditorBridge_Enabled";'
+                in compact
+            ),
+            "watch_scoped": (
+                "global::PrefabSentinel.EditorBridge.EditorBridgeSetup.PreferenceKey("
+                "WatchDirPrefKeyPrefix,CurrentProjectRoot())"
+                in compact
+            ),
+            "enabled_scoped": (
+                "global::PrefabSentinel.EditorBridge.EditorBridgeSetup.PreferenceKey("
+                "EnabledPrefKeyPrefix,CurrentProjectRoot())"
+                in compact
+            ),
+        }
+
+        self.assertEqual(
+            {name: True for name in checks},
+            checks,
+            msg=f"project-scoped EditorPrefs checks={checks}",
+        )
+
+
+class WatchIdentityLifecycleSourceInvariantTests(unittest.TestCase):
+    """Issue #179 — pin Unity-only watch-identity lifecycle wiring."""
+
+    @staticmethod
+    def _extract_instance_method(source: str, method_name: str) -> str:
+        match = re.search(
+            rf"private\s+void\s+{re.escape(method_name)}\s*\([^)]*\)\s*\{{",
+            source,
+        )
+        if match is None:
+            raise AssertionError(f"{method_name} not found in EditorBridge source")
+        return _extract_braced_block(source, match.end(), f"{method_name} body")
+
+    @staticmethod
+    def _normalized(source: str) -> str:
+        return " ".join(source.split())
+
+    def test_heartbeat_precedes_request_file_polling_and_owned_cleanup_runs(self) -> None:
+        source = _strip_cs_comments(_read(EDITOR_BRIDGE))
+        on_enable = self._extract_instance_method(source, "OnEnable")
+        on_update = self._extract_instance_method(source, "OnEditorUpdate")
+        on_disable = self._extract_instance_method(source, "OnDisable")
+        normalized_update = self._normalized(on_update)
+
+        heartbeat_call = (
+            "PublishWatchIdentityStatus(EditorApplication.timeSinceStartup);"
+        )
+        request_poll = 'Directory.GetFiles(_watchDir, "*" + RequestSuffix);'
+        self.assertIn("EditorApplication.update += OnEditorUpdate", on_enable)
+        self.assertIn(heartbeat_call, normalized_update)
+        self.assertIn(request_poll, normalized_update)
+        self.assertLess(
+            normalized_update.index(heartbeat_call),
+            normalized_update.index(request_poll),
+        )
+        self.assertIn("TryDeleteOwnedStatus", on_disable)
+
+    def test_heartbeat_uses_exact_time_and_project_root_relationships(self) -> None:
+        source = _strip_cs_comments(_read(EDITOR_BRIDGE))
+        heartbeat = self._normalized(
+            self._extract_instance_method(source, "PublishWatchIdentityStatus")
+        )
+
+        self.assertIn(
+            "EditorBridgeWatchIdentity.HeartbeatIntervalMilliseconds / 1000.0",
+            heartbeat,
+        )
+        self.assertIn(
+            "string projectRoot = "
+            "Directory.GetParent(Application.dataPath).FullName;",
+            heartbeat,
+        )
+        for token in (
+            "TryEnsureMarker",
+            "TryPublishStatus",
+            "CurrentBridgeSessionId",
+            "CurrentBridgeInstanceId",
+            "DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, heartbeat)
+
+    def test_heartbeat_timestamp_advances_only_after_success(self) -> None:
+        source = _strip_cs_comments(_read(EDITOR_BRIDGE))
+        heartbeat = self._normalized(
+            self._extract_instance_method(source, "PublishWatchIdentityStatus")
+        )
+        publication = "bool published = EditorBridgeWatchIdentity.TryPublishStatus("
+        failure_guard = "if (!published) return;"
+        timestamp_advance = "_lastWatchIdentityPublishTime = now;"
+
+        self.assertIn(publication, heartbeat)
+        self.assertIn(failure_guard, heartbeat)
+        self.assertIn(timestamp_advance, heartbeat)
+        self.assertLess(heartbeat.index(publication), heartbeat.index(failure_guard))
+        self.assertLess(
+            heartbeat.index(failure_guard),
+            heartbeat.index(timestamp_advance),
+        )
+
+    def test_first_heartbeat_and_watch_directory_change_reset_cached_marker(self) -> None:
+        source = _strip_cs_comments(_read(EDITOR_BRIDGE))
+        on_gui = self._extract_instance_method(source, "OnGUI")
+
+        self.assertIn(
+            "_lastWatchIdentityPublishTime = double.NegativeInfinity",
+            source,
+        )
+        self.assertIn("_activeWatchIdentity = string.Empty", on_gui)
+        self.assertIn(
+            "_lastWatchIdentityPublishTime = double.NegativeInfinity",
+            on_gui,
+        )
+
+    def test_internal_accessors_keep_exact_operator_context_fields(self) -> None:
+        control_source = _strip_cs_comments(_read(BRIDGE))
+        context_body = _extract_class_body(control_source, "EditorOperatorContext")
+        context_fields = set(
+            re.findall(
+                r"public\s+string\s+(\w+)\s*=\s*[^;]+;",
+                context_body,
+            )
+        )
+
+        self.assertIn(
+            "internal static string CurrentBridgeSessionId => BridgeSessionId;",
+            control_source,
+        )
+        self.assertIn(
+            "internal static string CurrentBridgeInstanceId => BridgeInstanceId;",
+            control_source,
+        )
+        self.assertEqual(
+            {
+                "project_root",
+                "bridge_session_id",
+                "bridge_instance_id",
+                "bridge_version",
+                "plugin_version",
+            },
+            context_fields,
+        )
+        for field_name in context_fields:
+            with self.subTest(field_name=field_name):
+                self.assertNotRegex(field_name.lower(), r"watch|marker")
+
+
 class TestBestEffortCatchWarnings(unittest.TestCase):
     """Issue #137 — every best-effort catch site listed below binds the
     exception via a typed parameter and emits exactly one warning whose
@@ -2235,16 +2441,12 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
 
     # (relative path, enclosing method name, minimum typed-catch count).
     # The minimum count locks multi-catch method bodies (for example
-    # ``TryIsFixedBufferProperty`` and ``WriteAtomic``) so a
-    # half-fixed regression still fails the audit.
-    # Issues #152 / #153 raise ``WriteAtomic`` to ``min_typed=2`` so both
-    # the outer atomic-write fallback and the inner direct-write
-    # fallback are typed catch sites with the warn-level template; a
-    # half-fixed regression that reverts the inner stage to bare catch
-    # therefore fails the audit.
+    # ``TryIsFixedBufferProperty``) so a half-fixed regression still
+    # fails the audit. Issue #176 moved Editor Bridge response publication
+    # into an executable Unity-free helper, so ``WriteAtomic`` is now a
+    # delegation-only wiring site rather than a best-effort catch site.
     _SITES = (
         ("PrefabSentinel.EditorBridge.cs", "ProcessRequest", 1),
-        ("PrefabSentinel.EditorBridge.cs", "WriteAtomic", 2),
         ("PrefabSentinel.EditorBridge.cs", "TryDelete", 1),
         ("PrefabSentinel.UnityRuntimeValidationBridge.cs", "WriteResponse", 1),
         # Issue #129 — the patch bridge is split into per-concern
@@ -2318,42 +2520,50 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
         self.assertNotRegex(body, r"intentional\s+best-effort")
         self.assertIn('"EDITOR_CTRL_UDON_ADD_COMPONENT_FAILED"', body)
 
-    def test_write_atomic_inner_fallback_has_no_commentary_only_catch(self) -> None:
-        """Issue #152 — ``WriteAtomic`` had an inner ``catch { /* best
-        effort */ }`` that swallowed the second-stage write failure with
-        no log trace.  Both fallback stages must now carry a typed catch
-        with the warn-level template; no permitting commentary
-        (``/* best effort */``-style or any other inline comment that
-        annotates the catch as silent) is allowed on either site.
+    def test_write_atomic_delegates_to_typed_response_publisher(self) -> None:
+        """Issue #176 — Unity-dependent wiring delegates publication behavior
+        to the executable pure helper instead of owning catch policy.
         """
-        text = (TOOLS_DIR / "PrefabSentinel.EditorBridge.cs").read_text(encoding="utf-8")
+        text = (TOOLS_DIR / "PrefabSentinel.EditorBridge.cs").read_text(
+            encoding="utf-8"
+        )
         body = _extract_method(text, "WriteAtomic")
-        # No bare ``catch { ... }`` (no exception parameter list); a
-        # bare catch is the structural marker of the regressed silent
-        # site.  The regex matches ``catch`` followed by optional
-        # whitespace and an opening brace, with no parenthesised
-        # parameter list in between.
-        self.assertNotRegex(
-            body,
-            r"catch\s*\{",
-            "WriteAtomic must not contain a bare 'catch {' (issue #152 silent-catch regression)",
+
+        self.assertIn("EditorBridgeResponsePublisher.Publish(", body)
+        self.assertNotRegex(body, r"catch\s*\(")
+
+
+    def test_on_editor_update_preserves_failed_publication_before_cleanup(
+        self,
+    ) -> None:
+        source = _strip_cs_comments(
+            (TOOLS_DIR / "PrefabSentinel.EditorBridge.cs").read_text(
+                encoding="utf-8"
+            )
         )
-        # No ``best effort``-style inline commentary inside the body.
-        self.assertNotRegex(
-            body,
-            r"best\s*effort",
-            "WriteAtomic must not annotate a catch site as 'best effort'",
+        match = re.search(
+            r"private\s+void\s+OnEditorUpdate\s*\(\s*\)\s*\{",
+            source,
         )
-        # Both stages emit the project warn-level template:
-        warn_emissions = re.findall(
-            r"Debug\.LogWarning\(\s*\$\"\[PrefabSentinel\]\s+WriteAtomic:",
-            body,
+        self.assertIsNotNone(match)
+        assert match is not None
+        method_body = _extract_braced_block(
+            source,
+            match.end(),
+            "OnEditorUpdate body",
         )
-        self.assertGreaterEqual(
-            len(warn_emissions),
-            2,
-            f"WriteAtomic must emit two warn-level templates (outer + inner); found {len(warn_emissions)}",
+
+        self.assertIn(
+            "catch (EditorBridgeResponsePublicationException",
+            method_body,
         )
+        self.assertIn(
+            "EditorBridgeResponsePublisher.TryPreserveRequest(",
+            method_body,
+        )
+        cleanup_guard = method_body.index("if (deleteRequest)")
+        cleanup_call = method_body.index("TryDelete(requestPath)")
+        self.assertLess(cleanup_guard, cleanup_call)
 
     @staticmethod
     def _extract_outer_catch_block(method_body: str) -> str:
@@ -2411,6 +2621,77 @@ class TestBestEffortCatchWarnings(unittest.TestCase):
                     r"Debug\.LogError\(",
                     f"{file_name}::{method_name}: outer catch must not emit Debug.LogError; warn-level convention applies",
                 )
+
+
+class TestUnifiedEditorBridgeProtocolV2(unittest.TestCase):
+    """Issue #177 — every resident file-IPC route shares protocol version 2."""
+
+    def test_csharp_routes_share_the_canonical_editor_protocol(self) -> None:
+        editor_control = (
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.cs"
+        ).read_text(encoding="utf-8")
+        runtime = (
+            TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs"
+        ).read_text(encoding="utf-8")
+        patch = (TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.cs").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertRegex(
+            editor_control,
+            r"public\s+const\s+int\s+ProtocolVersion\s*=\s*2\s*;",
+        )
+        self.assertIn(
+            "ProtocolVersion = UnityEditorControlBridge.ProtocolVersion",
+            runtime,
+        )
+        self.assertIn(
+            "ProtocolVersion = UnityEditorControlBridge.ProtocolVersion",
+            patch,
+        )
+
+    def test_outer_error_writer_has_no_optional_or_route_specific_version(
+        self,
+    ) -> None:
+        source = (TOOLS_DIR / "PrefabSentinel.EditorBridge.cs").read_text(
+            encoding="utf-8"
+        )
+        body = _extract_method(source, "WriteErrorResponse")
+
+        self.assertNotIn("protocolVersion =", body)
+        self.assertNotIn("int protocolVersion", body)
+        self.assertIn(
+            "protocol_version = UnityEditorControlBridge.ProtocolVersion",
+            body,
+        )
+        self.assertIn(
+            "public int protocol_version = "
+            "UnityEditorControlBridge.ProtocolVersion",
+            source,
+        )
+
+    def test_runtime_response_serializes_the_common_protocol_version(self) -> None:
+        source = (
+            TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs"
+        ).read_text(encoding="utf-8")
+
+        self.assertRegex(
+            source,
+            r"(?s)class\s+RuntimeResponse.*?"
+            r"protocol_version\s*=\s*ProtocolVersion\s*;",
+        )
+
+    def test_unity_integration_requests_use_the_common_protocol_version(self) -> None:
+        source = (TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs").read_text(
+            encoding="utf-8"
+        )
+        body = _extract_method(source, "BuildEditorControlRequest")
+
+        self.assertIn(
+            '"{\\\"protocol_version\\\":" + ProtocolVersion',
+            body,
+        )
+        self.assertNotIn('protocol_version\\\":1', body)
 
 
 class TestEditorAsmdefUiReferences(unittest.TestCase):
@@ -3226,6 +3507,74 @@ class TestHandleGetEditorStateReadsFiveFlags(unittest.TestCase):
         )
 
 
+    def test_handler_reports_unity_and_required_package_readiness(self) -> None:
+        source = _read(BRIDGE)
+        snapshot_body = _extract_class_body(source, "EditorStateSnapshot")
+        handler = _extract_method(source, "HandleGetEditorState")
+        required_package = _extract_method(source, "RequiredPackage")
+        udonsharp_package = _extract_method(source, "RequiredUdonSharpPackage")
+
+        expected = {
+            "unity_version": "public string unity_version" in snapshot_body,
+            "required_packages": (
+                "public RequiredPackageStatus[] required_packages" in snapshot_body
+            ),
+            "application_version": "Application.unityVersion" in handler,
+            "vrchat_base": '"com.vrchat.base"' in handler,
+            "vrchat_worlds": '"com.vrchat.worlds"' in handler,
+            "udonsharp": "RequiredUdonSharpPackage()" in handler,
+            "registered_packages": (
+                "PackageInfo.GetAllRegisteredPackages()" in required_package
+            ),
+            "exact_package_name": (
+                "package.name" in required_package
+                and "packageName" in required_package
+            ),
+            "udonsharp_worlds_package": (
+                'RequiredPackage("com.vrchat.worlds")' in udonsharp_package
+                and 'name = "udonsharp"' in udonsharp_package
+            ),
+            "udonsharp_editor_assembly": (
+                'assembly.GetName().Name == "UdonSharp.Editor"'
+                in udonsharp_package
+            ),
+        }
+        self.assertEqual({key: True for key in expected}, expected)
+        self.assertNotIn('assembly.GetName().Name == "UdonSharp"', udonsharp_package)
+        self.assertNotIn("FindForPackageName", source)
+
+
+class UnityAcceptanceEvidenceBridgeSourceTests(unittest.TestCase):
+    def test_bridge_emits_structured_smoke_and_cleanup_evidence(self) -> None:
+        source = _read(BRIDGE)
+        data_body = _extract_editor_control_data_body(source)
+        run_handler = _extract_method(source, "HandleRunIntegrationTests")
+        status_handler = _extract_method(source, "HandleAcceptanceStatus")
+        cleanup_handler = _extract_method(source, "HandleCleanupIntegrationTests")
+
+        checks = {
+            "response_run_id_field": "public string run_id = string.Empty;" in data_body,
+            "run_run_id": "run_id = acceptanceRequest.RunId" in run_handler,
+            "status_run_id": "run_id = request.run_id" in status_handler,
+            "cleanup_run_id": "run_id = request.run_id" in cleanup_handler,
+            "acceptance_cases": "acceptance_cases" in run_handler,
+            "acceptance_total": "acceptance_total" in run_handler,
+            "acceptance_passed": "acceptance_passed" in run_handler,
+            "acceptance_failed": "acceptance_failed" in run_handler,
+            "fixture_owned": "fixture_owned" in run_handler,
+            "lease_phase": "lease_phase" in run_handler,
+            "status_cleanup_performed": "cleanup_performed" in status_handler,
+            "cleanup_cleanup_performed": "cleanup_performed" in cleanup_handler,
+            "scene_setup_restored": "scene_setup_restored" in cleanup_handler,
+            "deleted_fixture_count": "deleted_fixture_count" in cleanup_handler,
+            "deleted_request_artifact_count": (
+                "deleted_request_artifact_count" in cleanup_handler
+            ),
+            "lease_removed": "lease_removed" in cleanup_handler,
+        }
+        self.assertEqual({key: True for key in checks}, checks)
+
+
 class EditorStateDirtyIdentitySourceTests(unittest.TestCase):
     def test_snapshot_declares_dirty_identity_and_provenance_fields(self) -> None:
         body = _read(BRIDGE)
@@ -3301,6 +3650,43 @@ class EditorStateDirtyIdentitySourceTests(unittest.TestCase):
             msg=f"dirty identity limited diagnostic checks={checks}",
         )
 
+
+    def test_dirty_asset_collectors_only_report_native_serialized_assets(self) -> None:
+        sources = {
+            "editor_state": (
+                _read(BRIDGE),
+                "CollectDirtyAssetPaths",
+            ),
+            "compile_snapshot": (
+                _strip_cs_comments(
+                    (
+                        TOOLS_DIR
+                        / "PrefabSentinel.UnityRuntimeValidationBridge.Compile.Snapshot.cs"
+                    ).read_text(encoding="utf-8")
+                ),
+                "CaptureLoadedDirtyAssetPaths",
+            ),
+            "clientsim": (
+                _strip_cs_comments(
+                    (
+                        TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs"
+                    ).read_text(encoding="utf-8")
+                ),
+                "DirtyAssetPaths",
+            ),
+        }
+        checks = {
+            label: "AssetDatabase.IsNativeAsset(asset)"
+            in _extract_method(source, method)
+            for label, (source, method) in sources.items()
+        }
+
+        self.assertEqual(
+            {label: True for label in checks},
+            checks,
+            msg=f"native serialized dirty-asset checks={checks}",
+        )
+
     def test_root_bridge_keeps_load_bearing_constants(self) -> None:
         root_source = _strip_cs_comments(BRIDGE.read_text(encoding="utf-8"))
         checks = {
@@ -3313,6 +3699,36 @@ class EditorStateDirtyIdentitySourceTests(unittest.TestCase):
             {"BridgeVersion": True, "ProtocolVersion": True, "DefaultCapacity": True},
             checks,
             msg=f"root bridge constant anchor checks={checks}",
+        )
+
+
+    def test_bridge_instance_identity_survives_managed_reload_via_session_state(
+        self,
+    ) -> None:
+        root_source = _strip_cs_comments(BRIDGE.read_text(encoding="utf-8"))
+        initializer = _extract_method(root_source, "InitializeBridgeInstanceId")
+        compact = re.sub(r"\s+", "", root_source)
+        checks = {
+            "session_key": (
+                'BridgeInstanceIdSessionKey='
+                '"PrefabSentinel.EditorBridge.InstanceId"'
+                in compact
+            ),
+            "session_read": "SessionState.GetString(" in initializer,
+            "session_write": "SessionState.SetString(" in initializer,
+            "validated_reuse": "IsValidBridgeIdentity(existing)" in initializer,
+            "generated_once": 'Guid.NewGuid().ToString("N")' in initializer,
+            "static_uses_initializer": (
+                "privatestaticreadonlystringBridgeInstanceId="
+                "InitializeBridgeInstanceId()"
+                in compact
+            ),
+        }
+
+        self.assertEqual(
+            {name: True for name in checks},
+            checks,
+            msg=f"managed-reload Bridge instance identity checks={checks}",
         )
 
 
@@ -3744,6 +4160,333 @@ class TestEditorControlDataDeclaresNoExceptionTextField(unittest.TestCase):
 # surface-identifying string and the full exception detail flows to the
 # Unity Console via Debug.LogWarning only.
 # ---------------------------------------------------------------------------
+
+
+class TestUnityAcceptanceProfileSource(unittest.TestCase):
+    """Issue #186: Unity-only acceptance wiring stays explicit and bounded."""
+
+    def test_dispatch_passes_the_request_to_the_integration_handler(self) -> None:
+        dispatch = _extract_method(_read(BRIDGE), "DispatchAction")
+        match = re.search(
+            r'case\s+"run_integration_tests":(?P<body>.*?)break;',
+            dispatch,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        route = match.group("body") if match is not None else ""
+        self.assertIn("HandleRunIntegrationTests(", route)
+        self.assertIn("requestPath", route)
+        self.assertIn("responsePath", route)
+        self.assertNotIn("HandleRunIntegrationTests()", route)
+
+
+    def test_acceptance_handlers_own_a_dedicated_partial(self) -> None:
+        run_script = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.RunScriptCompile.cs"
+        )
+        acceptance = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Acceptance.cs"
+        )
+        for method in (
+            "BuildAcceptanceCaseEvidence",
+            "HandleRunIntegrationTests",
+            "BuildAcceptanceRequestArtifactPaths",
+            "HandleAcceptanceStatus",
+            "HandleCleanupIntegrationTests",
+        ):
+            self.assertIn(f"{method}(", acceptance)
+            self.assertNotIn(f"{method}(", run_script)
+
+    def test_handler_validates_before_selecting_any_fixture_suite(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunIntegrationTests")
+        validation = body.index("UnityAcceptanceRequest.TryCreate")
+        default_suite = body.index("UnityIntegrationTests.RunTestSuite")
+        acceptance_suite = body.index("UnityIntegrationTests.RunAcceptanceTestSuite")
+
+        self.assertLess(validation, default_suite)
+        self.assertLess(validation, acceptance_suite)
+        self.assertNotIn("Environment.GetEnvironmentVariable", body)
+
+    def test_request_deserialization_preserves_omitted_profile_default(self) -> None:
+        run_from_paths = _extract_method(_read(BRIDGE), "RunFromPaths")
+        request_body = _extract_editor_control_request_body()
+
+        constructed = run_from_paths.index("request = new EditorControlRequest()")
+        overwritten = run_from_paths.index("JsonUtility.FromJsonOverwrite(json, request)")
+        self.assertLess(constructed, overwritten)
+        self.assertIn('public string test_profile = "default"', request_body)
+
+    def test_duplicate_case_exercises_existing_scene_resolver_grammar(self) -> None:
+        integration_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+        )
+        case_body = _extract_method(
+            integration_source,
+            "Test_Acceptance_DuplicateSameNameObjects",
+        )
+        fixture_body = _extract_method(
+            integration_source,
+            "CreateAcceptanceScene",
+        )
+        resolver_body = _extract_method(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityPatchBridge.Resolve.cs"),
+            "TryResolveHierarchyPathWithResolver",
+        )
+
+        self.assertIn(
+            "UnityPatchBridge.TryResolveHierarchyPathWithResolver",
+            case_body,
+        )
+        self.assertIn(
+            '"AcceptanceDuplicateParent/AcceptanceDuplicate"',
+            case_body,
+        )
+        self.assertIn(
+            '"AcceptanceDuplicateParent/AcceptanceDuplicate#0"',
+            case_body,
+        )
+        self.assertNotIn("TryResolveGameObjectInActiveStage", case_body)
+        self.assertIn("internal static bool", resolver_body)
+        self.assertIn('"AcceptanceDuplicateParent"', fixture_body)
+        self.assertIn('"AcceptanceDuplicate"', fixture_body)
+        self.assertIn("SetParent", fixture_body)
+
+    def test_acceptance_suite_contains_only_the_issue_186_case_matrix(self) -> None:
+        body = _extract_method(_read(TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"), "RunAcceptanceTestSuite")
+        required_cases = (
+            "Acceptance_SavedSceneAndPrefabFixture",
+            "Acceptance_DuplicateSameNameObjects",
+            "Acceptance_TransformMutationReadback",
+            "Acceptance_PrimitivePropertyOverride",
+            "Acceptance_EditorBridgeRequest",
+            "Acceptance_ConsoleErrorZero",
+        )
+        for case_name in required_cases:
+            with self.subTest(case_name=case_name):
+                self.assertIn(case_name, body)
+
+        self.assertIn("RestoreOriginalSceneSetup", body)
+        self.assertNotIn("Live_ClientSim", body)
+        self.assertNotIn("ClientSim", body)
+        self.assertNotIn("UdonSharpBacking", body)
+        self.assertNotIn("Environment.GetEnvironmentVariable", body)
+
+    def test_primitive_override_matches_the_persistent_source_component(
+        self,
+    ) -> None:
+        body = _extract_method(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"),
+            "Test_Acceptance_PrimitivePropertyOverride",
+        )
+
+        source_lookup = body.find(
+            "PrefabUtility.GetCorrespondingObjectFromSource(collider)"
+        )
+        modification_scan = body.find(
+            "PrefabUtility.GetPropertyModifications("
+        )
+        self.assertNotEqual(-1, source_lookup)
+        self.assertNotEqual(-1, modification_scan)
+        self.assertLess(source_lookup, modification_scan)
+        self.assertIn("modification.target == sourceCollider", body)
+        self.assertNotIn("modification.target == collider", body)
+
+    def test_case_exception_path_keeps_raw_detail_out_of_public_result(self) -> None:
+        body = _extract_method(
+            _read(TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"),
+            "RunAcceptanceTestSuite",
+        )
+        catch_body = _extract_catch_block(body, r"Exception\s+ex")
+
+        self.assertNotIn("ex.Message", catch_body)
+        self.assertIn("Debug.LogWarning", catch_body)
+        self.assertRegex(catch_body, r"\{ex\}")
+        self.assertIn("UnityAcceptanceCaseFailure.FromException", catch_body)
+
+    def test_lease_actions_are_private_run_owned_and_precede_fixture_mutation(self) -> None:
+        registry = _read(TOOLS_DIR / "PrefabSentinel.Dispatch.ActionRegistry.cs")
+        dispatch = _extract_method(_read(BRIDGE), "DispatchAction")
+        handlers = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Acceptance.cs"
+        )
+        integration = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+        )
+        lease_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityAcceptanceLease.cs"
+        )
+        data = _extract_editor_control_data_body(_read(BRIDGE))
+
+        for action, handler in (
+            ("acceptance_status", "HandleAcceptanceStatus"),
+            ("cleanup_integration_tests", "HandleCleanupIntegrationTests"),
+        ):
+            with self.subTest(action=action):
+                self.assertIn(f'"{action}"', registry)
+                route = re.search(
+                    rf'case\s+"{re.escape(action)}":(?P<body>.*?)break;',
+                    dispatch,
+                    re.DOTALL,
+                )
+                self.assertIsNotNone(route)
+                route_body = route.group("body") if route is not None else ""
+                self.assertIn(
+                    f"{handler}(request, requestPath)",
+                    route_body,
+                )
+
+        status = _extract_method(handlers, "HandleAcceptanceStatus")
+        cleanup = _extract_method(handlers, "HandleCleanupIntegrationTests")
+        suite = _extract_method(integration, "RunAcceptanceTestSuite")
+        cleanup_operation = _extract_method(
+            integration,
+            "CleanupAcceptanceLease",
+        )
+        postcondition_check = _extract_method(
+            integration,
+            "VerifyOriginalSceneSetup",
+        )
+        artifact_cleanup_match = re.search(
+            r"internal\s+bool\s+TryDeleteRequestArtifacts\([^\{]*\{",
+            lease_source,
+        )
+        self.assertIsNotNone(artifact_cleanup_match)
+        artifact_cleanup = _extract_braced_block(
+            lease_source,
+            artifact_cleanup_match.end()
+            if artifact_cleanup_match is not None
+            else 0,
+            "TryDeleteRequestArtifacts",
+        )
+
+        self.assertIn("requestPath", status)
+        self.assertIn("requestPath", cleanup)
+        self.assertRegex(
+            status,
+            r"UnityIntegrationTests\.GetAcceptanceLeaseStatus\(\s*"
+            r"request\.run_id,\s*requestPath\)",
+        )
+        self.assertRegex(
+            cleanup,
+            r"UnityIntegrationTests\.CleanupAcceptanceLease\(\s*"
+            r"request\.run_id,\s*requestPath\)",
+        )
+        self.assertIn("cleanup_required = summary.CleanupRequired", status)
+        self.assertIn("public bool cleanup_required", data)
+        self.assertNotIn("acceptance-lease-v1.json", status)
+        self.assertNotIn("acceptance-lease-v1.json", cleanup)
+        self.assertLess(
+            suite.index("TryReserveAcceptanceLease"),
+            suite.index("EnsureAssetFolder"),
+        )
+        self.assertIn("EDITOR_CTRL_ACCEPTANCE_LEASE_UNRESOLVED", integration)
+        self.assertIn("RestoreOriginalSceneSetup", cleanup_operation)
+        self.assertIn("VerifyOriginalSceneSetup", cleanup_operation)
+        self.assertRegex(
+            cleanup_operation,
+            r"lease\.TryDeleteRequestArtifacts\(\s*currentRequestPath",
+        )
+        self.assertNotIn(
+            "CleanupAcceptanceRequestArtifacts(lease.request_paths)",
+            cleanup_operation,
+        )
+        self.assertIn(
+            "index < RequestArtifactSuffixes.Length",
+            artifact_cleanup,
+        )
+        self.assertIn(
+            "request_id + RequestArtifactSuffixes[index]",
+            artifact_cleanup,
+        )
+        self.assertNotIn("foreach (string requestPath", artifact_cleanup)
+        delete_call = artifact_cleanup.index("File.Delete(deletePath)")
+        repeated_parent_check = artifact_cleanup.rindex(
+            "TryGetCanonicalParentDirectory(",
+            0,
+            delete_call,
+        )
+        loop_start = artifact_cleanup.index(
+            "for (int index = 0; index < RequestArtifactSuffixes.Length"
+        )
+        self.assertGreater(repeated_parent_check, loop_start)
+        self.assertIn("GetSceneManagerSetup", postcondition_check)
+
+    def test_lease_uses_actual_bridge_artifacts_and_full_scene_setup(self) -> None:
+        handlers = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.Acceptance.cs"
+        )
+        integration = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+        )
+
+        handler = _extract_method(handlers, "HandleRunIntegrationTests")
+        suite = _extract_method(integration, "RunAcceptanceTestSuite")
+        capture = _extract_method(integration, "CaptureOriginalSceneState")
+        cleanup = _extract_method(integration, "CleanupAcceptanceLease")
+
+        self.assertIn("requestPath", handler)
+        self.assertIn("responsePath", handler)
+        self.assertIn("requestPaths", suite)
+        self.assertIn("requestPaths", _extract_method(
+            integration,
+            "TryReserveAcceptanceLease",
+        ))
+        self.assertNotIn("if (!setup.isLoaded) continue", capture)
+        self.assertIn("TryDeleteRequestArtifacts", cleanup)
+
+    def test_lease_uses_canonical_root_exact_artifacts_and_full_setup_comparison(self) -> None:
+        integration = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+        )
+        lease = _read(TOOLS_DIR / "PrefabSentinel.UnityAcceptanceLease.cs")
+
+        suite = _extract_method(integration, "RunAcceptanceTestSuite")
+        verify = _extract_method(integration, "VerifyOriginalSceneSetup")
+
+        self.assertIn(
+            "UnityAcceptanceLeaseState.FixtureRootForRun(runId)",
+            suite,
+        )
+        self.assertNotIn('TestAssetDir + "/" + runId', suite)
+        self.assertIn("GetSceneManagerSetup", verify)
+        self.assertIn("UnityAcceptanceSceneSetupComparer.Matches", verify)
+        self.assertIn("expected.Length != actual.Length", lease)
+        self.assertIn("isLoaded", verify)
+        self.assertIn("isActive", verify)
+        self.assertIn("IsValidRequestArtifactSet", lease)
+        self.assertIn(
+            "paths.Length != RequestArtifactSuffixes.Length",
+            lease,
+        )
+        self.assertIn("public string request_id", lease)
+
+    def test_recovery_cleanup_success_always_emits_restoration_and_lease_evidence(
+        self,
+    ) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs")
+        cleanup = _extract_method(source, "CleanupAcceptanceLease")
+
+        self.assertEqual(3, cleanup.count("sceneSetupRestored: true"))
+        self.assertEqual(3, cleanup.count("leaseRemoved: true"))
+
+    def test_recovery_fixture_delete_count_tracks_only_existing_fixture_roots(
+        self,
+    ) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs")
+        cleanup = _extract_method(source, "CleanupAcceptanceLease")
+        cleanup_assets = _extract_method(source, "CleanupAcceptanceAssets")
+
+        self.assertIn(
+            "if (!AssetDatabase.IsValidFolder(assetFolder)) return false;",
+            cleanup_assets,
+        )
+        self.assertIn("return true;", cleanup_assets)
+        self.assertIn("int deletedFixtureCount = 0;", cleanup)
+        self.assertIn(
+            "if (CleanupAcceptanceAssets(fixturePath)) deletedFixtureCount++;",
+            cleanup,
+        )
+        self.assertIn("deletedFixtureCount: deletedFixtureCount", cleanup)
 
 
 class TestHandleRunIntegrationTestsCatchNoLeakInEnvelope(unittest.TestCase):
@@ -5960,10 +6703,15 @@ class EditorSerializedPropertyBridgeSourceTests(unittest.TestCase):
 class TestInspectorSerializedSurfaceSource(unittest.TestCase):
     _PARTIAL = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.cs"
 
+    _SCENE = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.Scene.cs"
+
     _PAYLOAD = TOOLS_DIR / "PrefabSentinel.UnityEditorControlBridge.InspectorSurface.Payload.cs"
 
+    _INTEGRATION = TOOLS_DIR / "PrefabSentinel.UnityIntegrationTests.cs"
+
     def _source(self) -> str:
-        return _strip_cs_comments(_read(self._PARTIAL) + _read(self._PAYLOAD))
+        scene = _read(self._SCENE) if self._SCENE.exists() else ""
+        return _strip_cs_comments(_read(self._PARTIAL) + scene + _read(self._PAYLOAD))
 
     def test_action_is_registered_in_both_runtimes_and_dispatched(self) -> None:
         from prefab_sentinel.editor_bridge import SUPPORTED_ACTIONS
@@ -6138,6 +6886,280 @@ class TestInspectorSerializedSurfaceSource(unittest.TestCase):
             msg="Inspector asset paths must be root-bound before any Unity asset load is selected",
         )
 
+    def test_scene_dispatch_passes_canonical_path_and_moves_lifecycle_out_of_core(self) -> None:
+        core_partial = _read(self._PARTIAL)
+        handler = _extract_method(core_partial, "HandleInspectSerializedSurface")
+        defining_declaration = (
+            "private static partial EditorControlResponse "
+            "InspectSceneSerializedSurface("
+            "EditorControlRequest request, string assetPath);"
+        )
+
+        self.assertIn(
+            "InspectSceneSerializedSurface(request, assetPath)",
+            handler,
+            msg="Scene dispatch must consume the canonical validated project-relative path",
+        )
+        self.assertIn(
+            defining_declaration,
+            " ".join(core_partial.split()),
+            msg="the core partial must own the exact partial-method defining declaration",
+        )
+        self.assertNotIn("InspectorSceneSurfaceAdapter", core_partial)
+        self.assertNotIn(
+            "EditorSceneManager.OpenScene",
+            core_partial,
+            msg="Scene ownership belongs only in the Scene concern partial",
+        )
+        self.assertNotIn(
+            "EditorSceneManager.CloseScene",
+            core_partial,
+            msg="Scene cleanup belongs only in the Scene concern partial",
+        )
+
+    def test_scene_adapter_orders_preflight_execution_cleanup_and_completion(self) -> None:
+        self.assertTrue(
+            self._SCENE.exists(),
+            msg="Inspector Scene ownership must have a dedicated concern partial",
+        )
+        scene_partial = _read(self._SCENE)
+        self.assertIn("public static partial class UnityEditorControlBridge", scene_partial)
+        self.assertRegex(
+            scene_partial,
+            (
+                r"private\s+static\s+partial\s+EditorControlResponse\s+"
+                r"InspectSceneSerializedSurface\(\s*"
+                r"EditorControlRequest\s+request,\s*string\s+assetPath\s*\)\s*\{"
+            ),
+            msg="Scene concern must own the exact partial-method implementation signature",
+        )
+        self.assertNotIn("InspectorSceneSurfaceAdapter", scene_partial)
+        body = _extract_method(scene_partial, "InspectSceneSerializedSurface")
+
+        finally_match = re.search(r"\bfinally\s*\{", body)
+        if finally_match is None:
+            self.fail("Inspector Scene cleanup must run in a finally block")
+        finally_body = _extract_braced_block(
+            body,
+            finally_match.end(),
+            "Inspector Scene cleanup finally block",
+        )
+        self.assertIn(
+            "decision.Ownership == InspectorSceneLifecycle.Ownership.Owned",
+            finally_body,
+        )
+        self.assertIn("InspectorCloseScene(targetScene, true)", finally_body)
+
+        positions = {
+            "before_snapshot": body.find("InspectorCaptureSnapshot()"),
+            "decision": body.find("InspectorSceneLifecycle.Decide("),
+            "dirty_return": body.find('"EDITOR_CTRL_INSPECTOR_SCENE_DIRTY"'),
+            "ambiguous_return": body.find(
+                '"EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS"'
+            ),
+            "owned_branch": body.find(
+                "decision.Ownership == InspectorSceneLifecycle.Ownership.Owned"
+            ),
+            "open": body.find("EditorSceneManager.OpenScene("),
+            "surface_resolution": body.find("ResolveInspectorComponent("),
+            "surface_exception_capture": body.find(
+                "ExceptionDispatchInfo.Capture(exception)"
+            ),
+            "finally": finally_match.start(),
+            "owned_close": body.find("InspectorCloseScene("),
+            "active_restore": body.find("InspectorSetActiveScene("),
+            "after_snapshot": body.rfind("InspectorCaptureSnapshot()"),
+            "completion": body.find("InspectorSceneLifecycle.EvaluateCompletion("),
+            "completion_failure_override": body.find(
+                '"EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED"'
+            ),
+            "surface_exception_throw": body.find("surfaceException.Throw()"),
+            "saved_surface_response": body.rfind("return surfaceResponse"),
+        }
+
+        self.assertEqual(
+            tuple(True for _ in positions),
+            tuple(position >= 0 for position in positions.values()),
+            msg=f"Inspector Scene adapter is missing lifecycle stages: {positions}",
+        )
+        self.assertEqual(
+            list(positions.values()),
+            sorted(positions.values()),
+            msg=f"Inspector Scene lifecycle order changed: {positions}",
+        )
+        self.assertEqual(
+            1,
+            body.count("EditorSceneManager.OpenScene("),
+            msg="only the explicit Owned branch may open the target Scene",
+        )
+        self.assertEqual(
+            1,
+            body.count("surfaceException.Throw()"),
+            msg=(
+                "the original surface exception must be rethrown only after cleanup "
+                "and completion failure override"
+            ),
+        )
+
+    def test_scene_handle_resolution_uses_unity_2022_public_enumeration(self) -> None:
+        scene_partial = _strip_cs_comments(_read(self._SCENE))
+
+        self.assertNotIn(
+            "SceneManager.GetSceneByHandle",
+            scene_partial,
+            msg="Unity 2022.3 exposes no public SceneManager.GetSceneByHandle API",
+        )
+        helper = _extract_method(
+            scene_partial,
+            "FindLoadedInspectorSceneByHandle",
+        )
+        required = (
+            "SceneManager.sceneCount",
+            "SceneManager.GetSceneAt(index)",
+            "scene.isLoaded",
+            "scene.handle == handle",
+        )
+        self.assertEqual(
+            tuple(True for _ in required),
+            tuple(token in helper for token in required),
+            msg="handle lookup must enumerate Unity 2022.3 public loaded-Scene APIs",
+        )
+
+        inspect = _extract_method(
+            scene_partial,
+            "InspectSceneSerializedSurface",
+        )
+        self.assertIn(
+            "FindLoadedInspectorSceneByHandle(decision.TargetHandle)",
+            inspect,
+        )
+        self.assertIn(
+            "FindLoadedInspectorSceneByHandle(before.active_handle)",
+            inspect,
+        )
+
+    def test_scene_adapter_declares_only_the_final_after_snapshot(self) -> None:
+        body = _extract_method(
+            _read(self._SCENE),
+            "InspectSceneSerializedSurface",
+        )
+        final_after = "InspectorSceneLifecycle.Snapshot after = InspectorCaptureSnapshot();"
+
+        self.assertEqual(
+            1,
+            body.count("InspectorSceneLifecycle.Snapshot after"),
+            msg="branch-local after snapshots must not shadow the final C# local",
+        )
+        self.assertEqual(1, body.count(final_after))
+        self.assertLess(
+            body.find("InspectorSetActiveScene("),
+            body.find(final_after),
+        )
+        self.assertLess(
+            body.find(final_after),
+            body.find("InspectorSceneLifecycle.EvaluateCompletion("),
+        )
+
+    def test_scene_adapter_captures_loaded_state_and_emits_typed_evidence(self) -> None:
+        self.assertTrue(
+            self._SCENE.exists(),
+            msg="Inspector Scene ownership must have a dedicated concern partial",
+        )
+        scene_partial = _strip_cs_comments(_read(self._SCENE))
+        capture = _extract_method(scene_partial, "CaptureInspectorSceneSnapshot")
+        failure = _extract_method(scene_partial, "BuildInspectorSceneFailure")
+
+        capture_tokens = (
+            "SceneManager.sceneCount",
+            "SceneManager.GetSceneAt(index)",
+            "if (!scene.isLoaded) continue",
+            "order = entries.Count",
+            "handle = scene.handle",
+            "path = NormalizeInspectorScenePath(scene.path)",
+            "dirty = scene.isDirty",
+            "SceneManager.GetActiveScene()",
+            "active_handle",
+            "active_path",
+        )
+        failure_tokens = (
+            "asset_path = assetPath",
+            "ownership = ownershipToken",
+            "matched_handles = matchedHandles",
+            "cleanup_attempted = cleanupAttempted",
+            "close_result = closeResult",
+            "active_restore_attempted = activeRestoreAttempted",
+            "active_restore_result = activeRestoreResult",
+            "before = before",
+            "after = after",
+            "failed_postconditions = failedPostconditions",
+            "code = rawCode",
+            'severity = "error"',
+            "path = assetPath",
+            "location = ownershipToken",
+            "detail = fixedDetail",
+            "evidence = JsonUtility.ToJson(evidence)",
+        )
+
+        self.assertEqual(
+            tuple(True for _ in capture_tokens),
+            tuple(token in capture for token in capture_tokens),
+            msg="Scene snapshot must record only complete loaded Scene-manager state",
+        )
+        self.assertEqual(
+            tuple(True for _ in failure_tokens),
+            tuple(token in failure for token in failure_tokens),
+            msg="Scene lifecycle failure must emit the exact deterministic evidence shape",
+        )
+        for raw_code in (
+            "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY",
+            "EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS",
+            "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+        ):
+            with self.subTest(raw_code=raw_code):
+                self.assertIn(raw_code, scene_partial)
+
+    def test_scene_adapter_has_only_feature_seams_and_no_save_reset_or_fallback(self) -> None:
+        self.assertTrue(
+            self._SCENE.exists(),
+            msg="Inspector Scene ownership must have a dedicated concern partial",
+        )
+        scene_partial = _strip_cs_comments(_read(self._SCENE))
+
+        self.assertIn("public static partial class UnityEditorControlBridge", scene_partial)
+        self.assertNotIn("InspectorSceneSurfaceAdapter", scene_partial)
+        seams = (
+            "internal static Func<Scene, bool, bool> InspectorCloseScene",
+            "EditorSceneManager.CloseScene",
+            "internal static Func<Scene, bool> InspectorSetActiveScene",
+            "SceneManager.SetActiveScene",
+            (
+                "internal static Func<InspectorSceneLifecycle.Snapshot> "
+                "InspectorCaptureSnapshot"
+            ),
+            "CaptureInspectorSceneSnapshot",
+        )
+        self.assertEqual(
+            tuple(True for _ in seams),
+            tuple(token in scene_partial for token in seams),
+            msg="Scene adapter must expose exactly the three feature-local test seams",
+        )
+        self.assertEqual(3, scene_partial.count("internal static Func<"))
+        self.assertIn("ExceptionDispatchInfo.Capture", scene_partial)
+        self.assertNotIn("EditorSceneManager.SetActiveScene", scene_partial)
+
+        forbidden = (
+            "RestoreSceneManagerSetup",
+            "SaveScene",
+            "SaveOpenScenes",
+            "MarkSceneDirty",
+            "ResetInspectorSceneTestHooks",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, scene_partial)
+        self.assertNotIn("retry", scene_partial.lower())
+        self.assertNotIn("fallback", scene_partial.lower())
+
 
     def test_target_payload_exposes_unity_local_file_id_for_exact_writer_probe(self) -> None:
         payload_source = _read(self._PAYLOAD)
@@ -6156,6 +7178,462 @@ class TestInspectorSerializedSurfaceSource(unittest.TestCase):
                     target_body,
                     msg=f"inspected target identity is missing writer address evidence {token!r}.",
                 )
+
+    def test_unity_integration_suite_registers_named_inspector_scene_behaviors(self) -> None:
+        integration = _read(self._INTEGRATION)
+        registration = _extract_method(integration, "RunTestSuite")
+        expected = (
+            (
+                "EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+                "Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+            ),
+            (
+                "EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+                "Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+            ),
+            (
+                "EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene",
+                "Test_EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene",
+            ),
+            (
+                "EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt",
+                "Test_EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt",
+            ),
+            (
+                "EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes",
+                "Test_EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes",
+            ),
+            (
+                "EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp",
+                "Test_EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp",
+            ),
+            (
+                "EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure",
+                "Test_EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure",
+            ),
+            (
+                "EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure",
+                "Test_EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure",
+            ),
+            (
+                "EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure",
+                "Test_EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure",
+            ),
+        )
+
+        self.assertEqual(
+            {case_name: (True, True) for case_name, _ in expected},
+            {
+                case_name: (
+                    f'"{case_name}"' in registration,
+                    method_name in registration,
+                )
+                for case_name, method_name in expected
+            },
+            msg=(
+                "source registration is supplemental wiring evidence only; all nine "
+                "repository-owned Unity cases must be reachable by the live suite"
+            ),
+        )
+
+    def test_unity_integration_scene_cases_register_observations_and_restore_seams(self) -> None:
+        integration = _read(self._INTEGRATION)
+        case_methods = (
+            "Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+            "Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+            "Test_EditorCtrl_InspectorScene_OwnsUnloadedTargetAndRestoresCleanActiveScene",
+            "Test_EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt",
+            "Test_EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes",
+            "Test_EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp",
+            "Test_EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure",
+            "Test_EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure",
+            "Test_EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure",
+        )
+        required_observations = (
+            "RunInspectorSceneOperation(",
+            "AssertInspectorSceneSnapshot(",
+            "InspectorSceneIsLoaded(",
+            "warningCount",
+        )
+        for method_name in case_methods:
+            with self.subTest(method_name=method_name):
+                body = (
+                    _extract_method(integration, method_name)
+                    if method_name in integration
+                    else ""
+                )
+                self.assertEqual(
+                    tuple(True for _ in required_observations),
+                    tuple(token in body for token in required_observations),
+                    msg=(
+                        "each Unity case must compare Scene order/identity/dirty/active "
+                        "state, target presence, and operation-window warning count"
+                    ),
+                )
+
+        injected_methods = case_methods[-3:]
+        captured_seams = (
+            (
+                "capturedCloseScene = UnityEditorControlBridge.InspectorCloseScene",
+                "UnityEditorControlBridge.InspectorCloseScene = capturedCloseScene",
+            ),
+            (
+                "capturedSetActiveScene = UnityEditorControlBridge.InspectorSetActiveScene",
+                "UnityEditorControlBridge.InspectorSetActiveScene = capturedSetActiveScene",
+            ),
+            (
+                "capturedSnapshot = UnityEditorControlBridge.InspectorCaptureSnapshot",
+                "UnityEditorControlBridge.InspectorCaptureSnapshot = capturedSnapshot",
+            ),
+        )
+        for method_name in injected_methods:
+            body = (
+                _extract_method(integration, method_name)
+                if method_name in integration
+                else ""
+            )
+            with self.subTest(method_name=method_name):
+                normalized_body = " ".join(body.split())
+                self.assertIn("finally", body)
+                for capture, restore in captured_seams:
+                    self.assertIn(capture, normalized_body)
+                    self.assertIn(restore, normalized_body)
+                self.assertNotIn("ResetInspectorSceneTestHooks", body)
+
+    def test_borrowed_clean_integration_case_isolates_target_as_only_loaded_scene(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        case = _extract_method(
+            integration,
+            "Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+        )
+        normalized = " ".join(case.split())
+        required = (
+            "OpenSceneMode.Single",
+            "SceneManager.sceneCount != 1",
+            "SceneManager.GetSceneAt(0)",
+            "onlyLoaded.isLoaded",
+            "onlyLoaded.handle != target.handle",
+            "onlyLoaded.path.Replace",
+            "SceneManager.GetActiveScene().handle != target.handle",
+        )
+
+        self.assertEqual(
+            {token: True for token in required},
+            {token: token in normalized for token in required},
+            msg=(
+                "the borrowed-clean integration case must dispatch with the target "
+                "as the literal sole loaded and active Scene"
+            ),
+        )
+
+    def test_scene_failure_cases_pin_diagnostic_identity_and_not_found_shape(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        lifecycle_helper = " ".join(
+            _extract_method(
+                integration,
+                "AssertInspectorLifecycleFailure",
+            ).split()
+        )
+        helper_contract = (
+            "string expectedAssetPath",
+            "string expectedDetail",
+            "diagnostic.path != expectedAssetPath",
+            "diagnostic.detail != expectedDetail",
+            "evidence.asset_path != expectedAssetPath",
+        )
+        self.assertEqual(
+            {token: True for token in helper_contract},
+            {token: token in lifecycle_helper for token in helper_contract},
+            msg=(
+                "Scene lifecycle failures must pin diagnostic path/detail and "
+                "evidence asset identity, not only code and ownership"
+            ),
+        )
+
+        failure_cases = (
+            (
+                "Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+                "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY",
+                (
+                    "The loaded Scene has unsaved changes; save or discard them "
+                    "before inspecting its last-saved serialized surface."
+                ),
+            ),
+            (
+                "Test_EditorCtrl_InspectorScene_InjectedCloseFailureReportsRestoreFailure",
+                "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                "Scene inspection could not restore the Editor Scene state.",
+            ),
+            (
+                "Test_EditorCtrl_InspectorScene_InjectedActiveRestoreFailureReportsRestoreFailure",
+                "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                "Scene inspection could not restore the Editor Scene state.",
+            ),
+            (
+                "Test_EditorCtrl_InspectorScene_InjectedPostconditionMismatchReportsRestoreFailure",
+                "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED",
+                "Scene inspection could not restore the Editor Scene state.",
+            ),
+        )
+        for method_name, raw_code, fixed_detail in failure_cases:
+            with self.subTest(method_name=method_name):
+                case = _extract_method(integration, method_name)
+                self.assertIn(raw_code, case)
+                self.assertIn("targetPath", case)
+                self.assertIn(fixed_detail, " ".join(case.split()))
+
+        target_not_found = " ".join(
+            _extract_method(
+                integration,
+                "Test_EditorCtrl_InspectorScene_OwnedTargetNotFoundCleansUp",
+            ).split()
+        )
+        target_contract = (
+            'const string requestedSymbolPath = "MissingTarget/BoxCollider"',
+            "RunInspectorSceneOperation( targetPath, requestedSymbolPath,",
+            '"EDITOR_CTRL_INSPECTOR_TARGET_NOT_FOUND"',
+            '"The requested serialized target was not found."',
+            "AssertInspectorSimpleFailure(",
+            "0)",
+            "AssertInspectorSceneSnapshot(name, before, after)",
+            "InspectorSceneIsLoaded(targetPath)",
+        )
+        self.assertEqual(
+            {token: True for token in target_contract},
+            {token: token in target_not_found for token in target_contract},
+            msg=(
+                "owned target-not-found must pin its exact request, raw message, "
+                "empty diagnostic shape, no surface, and cleanup observations"
+            ),
+        )
+
+    def test_dirty_loaded_scene_failure_helper_assignment_pins_none_ownership(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        dirty_case = " ".join(
+            _extract_method(
+                integration,
+                "Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+            ).split()
+        )
+        expected_assignment = (
+            "TestCaseResult error = AssertInspectorLifecycleFailure( "
+            'name, response, "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY", targetPath, '
+            '"The loaded Scene has unsaved changes; save or discard them before '
+            'inspecting its last-saved serialized surface.", "none", '
+            "new[] { target.handle },"
+        )
+
+        self.assertIn(
+            expected_assignment,
+            dirty_case,
+            msg=(
+                "dirty loaded-Scene rejection must assign the lifecycle helper "
+                "result while expecting literal ownership none; borrowed would "
+                "contradict the pre-borrow rejection decision"
+            ),
+        )
+
+    def test_inspector_scene_fixture_reacquires_current_loaded_scene_after_save(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        helper = (
+            _extract_method(integration, "RequireLoadedInspectorScene")
+            if "RequireLoadedInspectorScene" in integration
+            else ""
+        )
+        normalized = " ".join(helper.split())
+        required = (
+            "SceneManager.GetSceneByPath(path)",
+            "resolved.IsValid()",
+            "resolved.isLoaded",
+            "resolved.path.Replace",
+            "StringComparison.Ordinal",
+            "return resolved",
+        )
+
+        self.assertEqual(
+            {token: True for token in required},
+            {token: token in normalized for token in required},
+            msg=(
+                "fixture setup must reacquire the current loaded Scene by its exact "
+                "saved path and fail fast on invalid, unloaded, or mismatched identity"
+            ),
+        )
+
+    def test_inspector_scene_save_and_open_boundaries_use_reacquired_identity(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        fixture = _extract_method(
+            integration,
+            "CreateInspectorSceneFixture",
+        )
+        borrowed_clean = _extract_method(
+            integration,
+            "Test_EditorCtrl_InspectorScene_BorrowsUniqueLoadedCleanTarget",
+        )
+        fixture_normalized = " ".join(fixture.split())
+        borrowed_normalized = " ".join(borrowed_clean.split())
+        fixture_assignment = (
+            "Scene savedScene = RequireLoadedInspectorScene(path);"
+        )
+        open_assignment = (
+            "Scene target = RequireLoadedInspectorScene(targetPath);"
+        )
+        open_handle_pin = "if (target.handle != opened.handle)"
+
+        self.assertIn(
+            fixture_assignment,
+            fixture_normalized,
+            msg=(
+                "saved fixture identity must be assigned directly from the "
+                "path-authoritative loaded-Scene resolver"
+            ),
+        )
+        self.assertIn(
+            open_assignment,
+            borrowed_normalized,
+            msg=(
+                "Single-open current identity must be assigned directly from the "
+                "path-authoritative loaded-Scene resolver"
+            ),
+        )
+        self.assertIn(
+            open_handle_pin,
+            borrowed_normalized,
+            msg=(
+                "Single-open return and path-reacquired current Scene handles "
+                "must be compared directly"
+            ),
+        )
+
+        fixture_positions = (
+            fixture_normalized.find(
+                "EditorSceneManager.SaveScene(scene, path)"
+            ),
+            fixture_normalized.find(fixture_assignment),
+            fixture_normalized.find(
+                "EditorSceneManager.CloseScene(savedScene, true)"
+            ),
+            fixture_normalized.find("return savedScene"),
+        )
+        self.assertEqual(
+            tuple(True for _ in fixture_positions),
+            tuple(position >= 0 for position in fixture_positions),
+            msg=(
+                "saved fixture setup must close the path-reacquired loaded Scene "
+                "before the closed-fixture return"
+            ),
+        )
+        self.assertEqual(
+            list(fixture_positions),
+            sorted(fixture_positions),
+            msg=(
+                "fixture Scene assignment must occur after save and before "
+                "close/closed return"
+            ),
+        )
+
+        open_scene = borrowed_normalized.find(
+            "Scene opened = EditorSceneManager.OpenScene("
+        )
+        reacquire = borrowed_normalized.find(open_assignment)
+        handle_check = borrowed_normalized.find(open_handle_pin)
+        self.assertEqual(
+            (True, True, True),
+            (
+                open_scene >= 0,
+                open_scene < reacquire,
+                reacquire < handle_check,
+            ),
+            msg=(
+                "Single-open isolation must compare the returned handle with the "
+                "path-reacquired current loaded Scene before dispatch"
+            ),
+        )
+
+        no_fallback_cases = (
+            "Test_EditorCtrl_InspectorScene_RejectsUniqueLoadedDirtyTarget",
+            "Test_EditorCtrl_InspectorScene_OwnsTargetWhileUnrelatedActiveSceneIsDirtyAndPreservesIt",
+            "Test_EditorCtrl_InspectorScene_BorrowsNonActiveTargetAmongMultipleLoadedScenes",
+        )
+        for method_name in no_fallback_cases:
+            with self.subTest(method_name=method_name):
+                case = _extract_method(integration, method_name)
+                self.assertNotIn("EditorSceneManager.OpenScene(", case)
+                self.assertIn("CreateInspectorSceneFixture(", case)
+
+    def test_keep_loaded_fixture_closes_then_reopens_from_exact_saved_path(
+        self,
+    ) -> None:
+        integration = _read(self._INTEGRATION)
+        fixture = _extract_method(
+            integration,
+            "CreateInspectorSceneFixture",
+        )
+        normalized = " ".join(fixture.split())
+        saved_assignment = (
+            "Scene savedScene = RequireLoadedInspectorScene(path);"
+        )
+        close_saved = (
+            "if (!EditorSceneManager.CloseScene(savedScene, true))"
+        )
+        keep_loaded_branch = "if (!keepLoaded)"
+        closed_return = "return savedScene;"
+        open_assignment = (
+            "Scene opened = EditorSceneManager.OpenScene("
+            "path, OpenSceneMode.Additive);"
+        )
+        reopened_assignment = (
+            "Scene reopenedScene = RequireLoadedInspectorScene(path);"
+        )
+        handle_pin = "if (reopenedScene.handle != opened.handle)"
+        reopened_return = "return reopenedScene;"
+        ordered_statements = (
+            "EditorSceneManager.SaveScene(scene, path)",
+            saved_assignment,
+            close_saved,
+            keep_loaded_branch,
+            closed_return,
+            open_assignment,
+            reopened_assignment,
+            handle_pin,
+            reopened_return,
+        )
+        positions = tuple(
+            normalized.find(statement)
+            for statement in ordered_statements
+        )
+
+        self.assertEqual(
+            tuple(True for _ in positions),
+            tuple(position >= 0 for position in positions),
+            msg=(
+                "fixture setup must assign the saved and reopened Scene identities "
+                "from their authoritative boundaries"
+            ),
+        )
+        self.assertEqual(
+            list(positions),
+            sorted(positions),
+            msg=(
+                "fixture setup must save, reacquire, close, return early when "
+                "closed, then additive-open, reacquire, compare handles, and "
+                "return the reopened Scene"
+            ),
+        )
+        self.assertEqual(
+            1,
+            fixture.count("EditorSceneManager.OpenScene("),
+            msg="keepLoaded fixture setup must have exactly one disk-open path",
+        )
 
 
 class TestInspectorCandidateDiscoverySource(unittest.TestCase):
@@ -7641,6 +9119,80 @@ class TestRunScriptPollSurfacesCompileDiagnostics(unittest.TestCase):
 
 
 class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
+    def test_completion_read_failure_has_isolated_typed_envelope(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        self.assertRegex(
+            body,
+            r"string\s+body;\s*try\s*\{\s*"
+            r"body\s*=\s*File\.ReadAllText\(completionFile\);\s*\}\s*"
+            r"catch\s*\(\s*Exception\s+readEx\s*\)",
+            msg=(
+                "File.ReadAllText must be the only statement in the "
+                "read-specific try block."
+            ),
+        )
+        read_failure = _extract_catch_block(body, r"Exception\s+readEx")
+        self.assertNotIn(
+            "JsonUtility.FromJson<EditorControlResponse>",
+            read_failure,
+            msg=(
+                "JSON parsing and response projection failures must escape the "
+                "read-specific catch and reach RunFromPaths."
+            ),
+        )
+        self.assertIn(
+            '"EDITOR_CTRL_RUN_SCRIPT_COMPLETION_READ_FAILED"',
+            read_failure,
+        )
+        self.assertIn(
+            '"RunScript completion could not be read; execution outcome is unknown."',
+            read_failure,
+        )
+        for field in (
+            "executed = false",
+            "request_id = request.request_id",
+            'status = "failed"',
+            "state_unknown = true",
+            "read_only = false",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, read_failure)
+
+        self.assertIn("return BuildError(", read_failure)
+        public_envelope = read_failure.split("return BuildError(", 1)[1]
+        for forbidden in (
+            "EDITOR_CTRL_RUN_SCRIPT_UNKNOWN_REQUEST",
+            "completionFile",
+            "readEx",
+            "body",
+            "path",
+            "exception",
+            "artifact",
+            "stdout",
+            "diagnostics",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, public_envelope)
+
+    def test_poll_checks_completion_shape_before_unity_deserialization(self) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        shape_check = "RunScriptCompletionShape.HasExactlyOneObjectData(body)"
+        deserialize = "JsonUtility.FromJson<EditorControlResponse>(body)"
+
+        self.assertIn(
+            shape_check,
+            body,
+            msg=(
+                "Async poll must verify an object-valued top-level data member "
+                "before Unity materializes DTO field initializers."
+            ),
+        )
+        self.assertLess(
+            body.index(shape_check),
+            body.index(deserialize),
+            msg="Completion shape verification must precede JsonUtility.FromJson.",
+        )
+
     def test_failed_poll_preserves_inner_failure_envelope(self) -> None:
         body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
         self.assertIn(
@@ -7653,9 +9205,10 @@ class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
             body,
             msg="Async poll completion must preserve failed inner severity.",
         )
-        self.assertIn(
-            '? "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"\n                                : inner.code',
+        self.assertRegex(
             body,
+            r'code\s*=\s*inner\.success\s*\?\s*'
+            r'"EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED"\s*:\s*inner\.code',
             msg="Failed async poll completion must keep the runtime/compile error code.",
         )
         self.assertIn(
@@ -7675,6 +9228,46 @@ class TestRunScriptPollFailureEnvelopeSource(unittest.TestCase):
                 "responses."
             ),
         )
+
+    def test_uninterpretable_completion_returns_typed_failure_without_raw_body(
+        self,
+    ) -> None:
+        body = _extract_method(_read(BRIDGE), "HandleRunScriptPoll")
+        invalid_completion = body.split("return response;", 1)[1].split(
+            "if (request.cleanup_on_timeout)", 1
+        )[0]
+
+        self.assertRegex(
+            invalid_completion,
+            r'return\s+BuildError\(\s*"EDITOR_CTRL_RUN_SCRIPT_COMPLETION_INVALID"',
+            msg=(
+                "A null, missing-data, or unparseable completion must fail closed "
+                "with its dedicated error code."
+            ),
+        )
+        self.assertIn(
+            '"RunScript completion could not be interpreted; execution outcome is unknown."',
+            invalid_completion,
+        )
+        for field in (
+            "executed = false",
+            "request_id = request.request_id",
+            'status = "failed"',
+            "state_unknown = true",
+            "read_only = false",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, invalid_completion)
+        for forbidden in (
+            "BuildSuccess",
+            "EDITOR_CTRL_RUN_SCRIPT_POLL_COMPLETED",
+            'status = "completed"',
+            "executed = true",
+            "stdout",
+            "raw body",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, invalid_completion)
 
 
 class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
@@ -7723,11 +9316,716 @@ class TestClientSimSideEffectAssetCandidatesSource(unittest.TestCase):
         )
 
 
+class TestRuntimeValidationCompileAuditSource(unittest.TestCase):
+    """Issue #167 — runtime compile mutation has one audited authority boundary."""
+
+    @staticmethod
+    def _runtime_source() -> str:
+        return _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+
+    @staticmethod
+    def _compile_source() -> str:
+        canonical = TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.Compile.cs"
+        if not canonical.is_file():
+            raise AssertionError(f"Runtime compile partial is missing: {canonical.name}")
+        partials = sorted(
+            TOOLS_DIR.glob("PrefabSentinel.UnityRuntimeValidationBridge.Compile*.cs")
+        )
+        return _strip_cs_comments(
+            "\n".join(path.read_text(encoding="utf-8") for path in partials)
+        )
+
+    @staticmethod
+    def _hashset_body(source: str, field_name: str) -> str:
+        match = re.search(
+            rf"{re.escape(field_name)}\s*=\s*new\s+HashSet<string>\s*{{",
+            source,
+        )
+        if match is None:
+            raise AssertionError(f"HashSet {field_name} not found")
+        return _extract_braced_block(source, match.end(), field_name)
+
+    @classmethod
+    def _assert_singleton_runtime_actions(cls, runtime_source: str) -> None:
+        for field_name in ("SupportedActions", "AsyncActions"):
+            actions = re.findall(
+                r'"[^"]+"',
+                cls._hashset_body(runtime_source, field_name),
+            )
+            if actions != ['"validate_runtime"']:
+                raise AssertionError(
+                    f"{field_name} must be exactly ['\"validate_runtime\"']; "
+                    f"observed {actions!r}"
+                )
+
+    @staticmethod
+    def _preflight_fact_partial_sources() -> dict[str, str]:
+        names = (
+            "PrefabSentinel.UnityRuntimeValidationBridge.Compile.Inventory.cs",
+            "PrefabSentinel.UnityRuntimeValidationBridge.Compile.Snapshot.cs",
+            "PrefabSentinel.UnityRuntimeValidationBridge.Compile.PrefabRepair.cs",
+        )
+        return {
+            name: _strip_cs_comments(
+                (TOOLS_DIR / name).read_text(encoding="utf-8")
+            )
+            for name in names
+        }
+
+    @classmethod
+    def _with_injected_action(
+        cls,
+        runtime_source: str,
+        field_name: str,
+        alias: str,
+    ) -> str:
+        match = re.search(
+            rf"{re.escape(field_name)}\s*=\s*new\s+HashSet<string>\s*{{",
+            runtime_source,
+        )
+        if match is None:
+            raise AssertionError(f"HashSet {field_name} not found")
+        body = _extract_braced_block(
+            runtime_source,
+            match.end(),
+            field_name,
+        )
+        mutated_body = body.replace(
+            '"validate_runtime",',
+            f'"validate_runtime",\n            "{alias}",',
+            1,
+        )
+        return (
+            runtime_source[: match.end()]
+            + mutated_body
+            + runtime_source[match.end() + len(body) :]
+        )
+
+    @classmethod
+    def _assert_preflight_boundary_is_side_effect_free(
+        cls,
+        fact_sources: dict[str, str],
+        shared_compile_source: str,
+    ) -> None:
+        forbidden_calls = (
+            r"\bGetAllUdonSharpPrograms\s*\(",
+            r"\.SerializedProgramAsset\b",
+            r"\bGetSerializedProgramAssetWithoutRefresh\s*\(",
+            r"\bImportAsset\s*\(",
+            r"\bAssetDatabase\.Refresh\s*\(",
+            r"\bAssetDatabase\.CreateAsset\s*\(",
+            r"\bAssetDatabase\.DeleteAsset\s*\(",
+            r"\bLoadPrefabContents\s*\(",
+            r"\bSaveAsPrefabAsset\s*\(",
+            r"\bRepairPrefabProgramAssets\s*\(",
+        )
+        boundary = dict(fact_sources)
+        boundary["AddUniquePath"] = _extract_method(
+            shared_compile_source,
+            "AddUniquePath",
+        )
+        for owner, source in boundary.items():
+            for forbidden in forbidden_calls:
+                if re.search(forbidden, source):
+                    raise AssertionError(
+                        f"{owner} contains forbidden preflight call {forbidden}"
+                    )
+
+    def test_validate_runtime_is_the_only_supported_async_action(self) -> None:
+        self._assert_singleton_runtime_actions(self._runtime_source())
+
+    def test_compile_preflight_has_no_udonsharp_repair_or_refresh_path(self) -> None:
+        self._assert_preflight_boundary_is_side_effect_free(
+            self._preflight_fact_partial_sources(),
+            self._compile_source(),
+        )
+
+    def test_each_runtime_registry_detects_an_injected_alias(self) -> None:
+        runtime_source = self._runtime_source()
+
+        for field_name in ("SupportedActions", "AsyncActions"):
+            with self.subTest(field_name=field_name):
+                mutated = self._with_injected_action(
+                    runtime_source,
+                    field_name,
+                    "compile_udonsharp",
+                )
+                with self.assertRaisesRegex(AssertionError, field_name):
+                    self._assert_singleton_runtime_actions(mutated)
+
+    def test_each_preflight_partial_and_shared_helper_detects_forbidden_call(
+        self,
+    ) -> None:
+        fact_sources = self._preflight_fact_partial_sources()
+        compile_source = self._compile_source()
+
+        for file_name, source in fact_sources.items():
+            with self.subTest(file_name=file_name):
+                mutated_sources = dict(fact_sources)
+                mutated_sources[file_name] = source.replace(
+                    "{",
+                    "{\n            AssetDatabase.Refresh();",
+                    1,
+                )
+                with self.assertRaisesRegex(AssertionError, file_name):
+                    self._assert_preflight_boundary_is_side_effect_free(
+                        mutated_sources,
+                        compile_source,
+                    )
+
+        shared_body = _extract_method(compile_source, "AddUniquePath")
+        mutated_shared_body = shared_body.replace(
+            "{",
+            "{\n            AssetDatabase.Refresh();",
+            1,
+        )
+        mutated_compile_source = compile_source.replace(
+            shared_body,
+            mutated_shared_body,
+            1,
+        )
+        with self.assertRaisesRegex(AssertionError, "AddUniquePath"):
+            self._assert_preflight_boundary_is_side_effect_free(
+                fact_sources,
+                mutated_compile_source,
+            )
+
+    def test_prefab_repair_detection_never_loads_or_saves_prefab_contents(self) -> None:
+        detector_body = _extract_method(self._compile_source(), "DetectPrefabRepairs")
+
+        self.assertNotIn("LoadPrefabContents", detector_body)
+        self.assertNotIn("SaveAsPrefabAsset", detector_body)
+        self.assertNotIn("RepairPrefabProgramAssets", detector_body)
+
+    def test_preflight_policy_precedes_the_single_authorized_compile_call(self) -> None:
+        compile_source = self._compile_source()
+        runtime_source = self._runtime_source()
+        prepare_body = _extract_method(
+            runtime_source,
+            "TryPrepareCompile",
+        )
+        transaction_body = _extract_method(
+            runtime_source,
+            "ExecuteCompile",
+        )
+        mutation_body = _extract_method(compile_source, "ExecuteAuthorizedCompile")
+
+        self.assertIn("EvaluatePreflight", prepare_body)
+        self.assertLess(
+            transaction_body.index("TryPrepareCompile"),
+            transaction_body.index("ExecuteAuthorizedCompile"),
+        )
+        self.assertIn("CompileAllCsPrograms", mutation_body)
+        self.assertEqual(1, mutation_body.count("compileAllPrograms.Invoke"))
+
+    def test_compile_generated_assets_report_has_exact_four_field_schema(
+        self,
+    ) -> None:
+        compile_source = self._compile_source()
+        compile_report_body = _extract_class_body(
+            compile_source,
+            "RuntimeCompileReport",
+        )
+        generated_report_body = _extract_class_body(
+            compile_source,
+            "GeneratedAssetReport",
+        )
+        fields = (
+            "planned_created_paths",
+            "planned_deleted_paths",
+            "actual_created_paths",
+            "actual_deleted_paths",
+        )
+
+        self.assertIn(
+            "GeneratedAssetReport generated_assets",
+            compile_report_body,
+        )
+        self.assertNotIn(
+            "GeneratedAssetPlan generated_assets",
+            compile_report_body,
+        )
+        self.assertEqual(
+            {field: 1 for field in fields},
+            {
+                field: generated_report_body.count(
+                    f"public string[] {field}"
+                )
+                for field in fields
+            },
+            msg=(
+                "runtime_validation_report.v1 generated_assets must serialize "
+                "exactly the four planned/actual path arrays"
+            ),
+        )
+
+    def test_normal_udonsharp_compile_failure_captures_bounded_diagnostics(
+        self,
+    ) -> None:
+        compile_source = self._compile_source()
+        mutation_body = _extract_method(
+            compile_source,
+            "ExecuteAuthorizedCompile",
+        )
+        diagnostic_body = _extract_method(
+            compile_source,
+            "AppendUdonSharpCompileDiagnostics",
+        )
+        self.assertIn("UnityEngine.Application.LogCallback", mutation_body)
+        subscribe_index = mutation_body.index(
+            "UnityEngine.Application.logMessageReceived += compileLogHandler"
+        )
+        invoke_index = mutation_body.index("compileAllPrograms.Invoke")
+        unsubscribe_index = mutation_body.index(
+            "UnityEngine.Application.logMessageReceived -= compileLogHandler"
+        )
+
+        self.assertLess(subscribe_index, invoke_index)
+        self.assertLess(invoke_index, unsubscribe_index)
+        self.assertIn("finally", mutation_body[invoke_index:unsubscribe_index])
+        for token in (
+            "UnityEngine.LogType.Error",
+            "UnityEngine.LogType.Exception",
+            "UnityEngine.LogType.Assert",
+            "MaxCapturedUdonSharpCompileErrors",
+        ):
+            with self.subTest(capture_token=token):
+                self.assertIn(token, mutation_body)
+        for token in (
+            "sourceCsScript",
+            "BindingFlags.Public | BindingFlags.Instance",
+            "AssetDatabase.GetAssetPath",
+            "udonsharp_compiler_error",
+            "programPath",
+            "sourcePath",
+            "condition",
+            "stackTrace",
+        ):
+            with self.subTest(mapping_token=token):
+                self.assertIn(token, diagnostic_body)
+        self.assertNotIn(
+            "LastCompileDiagnostics",
+            compile_source,
+            msg="UdonSharp's internal compiler cache must not be reflected.",
+        )
+
+    def test_editor_dispatcher_routes_runtime_bridge_exactly_once(self) -> None:
+        process_body = _extract_method(
+            _read(TOOLS_DIR / "PrefabSentinel.EditorBridge.cs"),
+            "ProcessRequest",
+        )
+
+        self.assertEqual(
+            1,
+            process_body.count(
+                "UnityRuntimeValidationBridge.RunFromPaths(requestPath, responsePath)"
+            ),
+        )
+        self.assertIn(
+            "UnityRuntimeValidationBridge.SupportedActions.Contains(header.action)",
+            process_body,
+        )
+        self.assertIn(
+            "UnityRuntimeValidationBridge.AsyncActions.Contains(header.action)",
+            process_body,
+        )
+
+
+@pytest.mark.source_text_invariant
+class TestRuntimeValidationDocumentationContract(unittest.TestCase):
+    """Issue #167 public docs keep one explicit, audited runtime authority."""
+
+    _ROOT = Path(__file__).resolve().parent.parent
+    _PUBLIC_OWNERS = (
+        "README.md",
+        "docs/tools.md",
+        "docs/tool-conventions.md",
+        "docs/api-reference.md",
+        "docs/execution-reference.md",
+        "TESTING.md",
+        "CHANGELOG.md",
+    )
+    _API_RUNTIME_HEADING = "## Audited runtime validation response (Issue #167)"
+
+    def _read(self, relative_path: str) -> str:
+        return (self._ROOT / relative_path).read_text(encoding="utf-8")
+
+    @staticmethod
+    def _section(document: str, heading: str) -> str:
+        start = document.index(heading)
+        end = document.find("\n## ", start + len(heading))
+        return document[start:] if end < 0 else document[start:end]
+
+    @staticmethod
+    def _assert_no_implicit_compile_default(document: str) -> None:
+        forbidden = (
+            r"(?i)default\s+(?:to\s+)?[`\"]?compile_only",
+            r"(?i)default\s+profile\s+is\s+[`\"]?compile_only",
+            r"(?i)if\s+profile\s+is\s+omitted,?\s*compile_only\s+runs",
+            r"既定(?:値)?(?:は|が)?\s*[`\"]?compile_only",
+            r"省略時は\s*compile_only",
+            r"implicit(?:ly)?\s+(?:runs?|uses?)\s+[`\"]?compile_only",
+            r"compile_only\s*(?:is|を)\s*(?:the\s*)?(?:default|既定)",
+            r"(?i)compile_only\s+is\s+read-only",
+            r"compile_only\s*は\s*read-only",
+        )
+        for pattern in forbidden:
+            if re.search(pattern, document):
+                raise AssertionError(
+                    f"public runtime documentation restores an implicit compile_only default: {pattern}"
+                )
+
+    def test_runtime_contract_owners_expose_audited_profiles_and_migration(self) -> None:
+        """Catches an omitted owner contract or a compatibility default."""
+        documents = {relative: self._read(relative) for relative in self._PUBLIC_OWNERS}
+        required = {
+            "README.md": ("profile", "docs/api-reference.md"),
+            "docs/tools.md": ("conditional/write", "editor_console_only"),
+            "docs/tool-conventions.md": ("write-class", "runtime shortcut"),
+            "docs/api-reference.md": (
+                "RUN_PROFILE_REQUIRED",
+                "runtime_validation_report.v1",
+                "### Compile audit typed schema",
+                "### Runtime/report error codes",
+            ),
+            "docs/execution-reference.md": (
+                "preflight",
+                "compile",
+                "clientsim",
+                "no save",
+            ),
+            "TESTING.md": (
+                "validate_runtime(profile=\"clientsim\"",
+                "without reload",
+                "without save",
+            ),
+            "CHANGELOG.md": (
+                "patch_apply(runtime_scene=...)",
+                "0.9.0",
+                "historical",
+            ),
+        }
+        self.assertEqual(
+            {relative: {token: True for token in tokens} for relative, tokens in required.items()},
+            {
+                relative: {token: token in documents[relative] for token in tokens}
+                for relative, tokens in required.items()
+            },
+        )
+        for relative, document in documents.items():
+            with self.subTest(owner=relative):
+                self._assert_no_implicit_compile_default(document)
+
+    def test_api_runtime_section_has_exact_compile_identity_and_delta_schema(self) -> None:
+        """Catches schema prose that omits a field, type, or delta array."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+        required = (
+            "### Compile audit typed schema",
+            "executed: bool",
+            "success: bool",
+            "severity: string",
+            "code: string",
+            "program_count: int",
+            "before: Snapshot",
+            "after: Snapshot",
+            "delta: Delta",
+            "generated_assets: GeneratedAssetReport",
+            "diagnostics: RuntimeDiagnostic[]",
+            "guid: string",
+            "local_file_id: long",
+            "path: string",
+            "type: string",
+            "dirty: bool",
+            "handle: int",
+            "inventory_stable: bool",
+            "prefab_repair_paths: string[]",
+            "related_assets: AssetIdentity[]",
+            "loaded_scenes: SceneIdentity[]",
+            "project_dirty_paths: string[]",
+            "newly_dirty_paths: string[]",
+            "no_longer_dirty_paths: string[]",
+            "newly_dirty_scene_paths: string[]",
+            "no_longer_dirty_scene_paths: string[]",
+            "planned_created_paths: string[]",
+            "planned_deleted_paths: string[]",
+            "actual_created_paths: string[]",
+            "actual_deleted_paths: string[]",
+            "unrelated_dirty_paths_before: string[]",
+            "unrelated_dirty_paths_after: string[]",
+            "attribution_unknown: string[]",
+        )
+        self.assertEqual(
+            {token: True for token in required},
+            {token: token in section for token in required},
+            msg="The API owner must publish the complete compile audit DTO, including all eleven delta arrays.",
+        )
+
+    def test_api_runtime_section_enumerates_exact_runtime_report_errors(self) -> None:
+        """Catches wildcard report errors or stale ClientSim envelope rows."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+        required_rows = (
+            "| RUN_PROFILE_REQUIRED | false | error |",
+            "| GENERATED_ASSET_POLICY_INVALID | false | error |",
+            "| OUT_REPORT_INVALID | false | error |",
+            "| OUT_REPORT_WRITE_FAILED | false | error |",
+            "| RUN_COMPILE_OK | true | info or warning |",
+            "| RUN_COMPILE_FAILED | false | error |",
+            "| UDON_GENERATED_ASSET_OUTCOME_MISMATCH | false | error |",
+            "| UDON_COMPILE_PREFLIGHT_INDETERMINATE | false | error |",
+            "| UDON_COMPILE_PREFAB_REPAIR_REQUIRED | false | error |",
+            "| UDON_COMPILE_DIRTY_PRECONDITION | false | error |",
+            "| UDON_COMPILE_DIRTY_SCENE_PRECONDITION | false | error |",
+            "| UDON_GENERATED_ASSET_REPLACEMENT_REQUIRED | false | error |",
+            "| UDON_GENERATED_ASSET_CREATION_REQUIRED | false | error |",
+        )
+        self.assertEqual(
+            {row: True for row in required_rows},
+            {row: row in section for row in required_rows},
+            msg="Runtime/report errors must be exact rows with their implemented success and severity.",
+        )
+
+    def test_api_runtime_section_has_exact_nested_clientsim_and_outer_schema(self) -> None:
+        """Catches nullable ClientSim evidence or strict outer fields omitted from the API."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+        required = (
+            "### Runtime payload typed schema",
+            "protocol_version: int",
+            "success: bool",
+            "severity: string",
+            "code: string",
+            "message: string",
+            "data: RuntimeData",
+            "diagnostics: RuntimeDiagnostic[]",
+            "project_root: string",
+            "scene_path: string",
+            "profile: string",
+            "timeout_sec: int",
+            "udon_program_count: int",
+            "clientsim_ready: bool",
+            "read_only: bool",
+            "executed: bool",
+            "side_effect_report: ClientSimSideEffectReport | null",
+            "initial_scene_snapshot: SceneIdentity[]",
+            "before: SceneSideEffectSnapshot | null",
+            "runtime: SceneSideEffectSnapshot | null",
+            "after: SceneSideEffectSnapshot | null",
+            "side_effect_report: ClientSimSideEffectReport | null",
+            "Roots: string[]",
+            "Hierarchy: string[]",
+            "Components: string[]",
+            "AssetChangeCandidates: string[]",
+            "Dirty: bool",
+            "DirtyCount: int",
+            "diff_complete: bool",
+            "diff_warnings: string[]",
+            "roots_before: string[]",
+            "residual_added_gameobjects: string[]",
+            "asset_change_candidates: string[]",
+            "dirty_count_after: int",
+            "result.success: bool",
+            "result.severity: string",
+            "result.code: string",
+            "result.message: string",
+            "result.diagnostics: RuntimeDiagnostic[]",
+        )
+        self.assertEqual(
+            {token: True for token in required},
+            {token: token in section for token in required},
+            msg="Runtime API docs must publish every strict outer, ClientSim, snapshot, and result field.",
+        )
+
+    def test_api_runtime_code_table_includes_protocol_and_startup_errors(self) -> None:
+        """Catches omitted host-converted runtime codes."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+        required_rows = (
+            "| RUN_PROTOCOL_ERROR | false | error |",
+            "| RUN002 | false | error |",
+        )
+        self.assertEqual(
+            {row: True for row in required_rows},
+            {row: row in section for row in required_rows},
+        )
+
+    def test_api_runtime_code_table_includes_report_reservation_and_terminal_codes(self) -> None:
+        """Catches omitted report-path and terminal pipeline codes."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+        expected = (
+            "| OUT_REPORT_REQUIRED | false | error |",
+            "| OUT_REPORT_OUTSIDE_PROJECT | false | error |",
+            "| VALIDATE_RUNTIME_RESULT | true or false | info, warning, error, or critical |",
+        )
+        self.assertEqual(
+            {row: True for row in expected},
+            {row: row in section for row in expected},
+        )
+
+    def test_api_runtime_profile_table_has_one_authoritative_value_per_key(self) -> None:
+        """Catches malformed/duplicate profile rows and contradictory authoritative values."""
+        section = self._section(
+            self._read("docs/api-reference.md"),
+            self._API_RUNTIME_HEADING,
+        )
+
+        def parse_profile_table(document: str) -> dict[str, str]:
+            start = document.index("### Runtime profile contract")
+            end = document.index("\n### ", start + 1)
+            lines = document[start:end].splitlines()
+            if lines[2] != "| key | authoritative value |":
+                raise AssertionError("Runtime profile table must declare exactly key/value columns.")
+            parsed: dict[str, str] = {}
+            for line in lines[4:]:
+                if not line.startswith("|"):
+                    continue
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if len(cells) != 2:
+                    raise AssertionError(
+                        f"Runtime profile table row must have exactly two cells: {line}"
+                    )
+                key, value = cells
+                if key in parsed:
+                    raise AssertionError(f"Runtime profile table has duplicate key: {key}")
+                parsed[key] = value
+            return parsed
+
+        expected = {
+            "profile": "required; no default",
+            "editor_console_only": "read-only",
+            "compile_only": "conditional/write",
+            "clientsim": "conditional/write",
+            "console_authority": "unity_log or editor_bridge (compile_only only)",
+            "generated_asset_policy": "deny / create / replace",
+            "audit owner": "api-reference.md",
+        }
+        self.assertEqual(expected, parse_profile_table(section))
+
+        mutations = (
+            section.replace(
+                "| compile_only | conditional/write |",
+                "| compile_only | read-only |\n| compile_only | conditional/write |",
+            ),
+            section.replace(
+                "| generated_asset_policy | deny / create / replace |",
+                "| generated_asset_policy | deny / create |\n| generated_asset_policy | deny / create / replace |",
+            ),
+        )
+        for mutated in mutations:
+            with self.subTest(mutated=mutated):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    "duplicate key",
+                ):
+                    parse_profile_table(mutated)
+
+    def test_runtime_convention_rows_link_to_api_without_exact_audit_tuple(self) -> None:
+        """Catches audit tuple/path constraints duplicated in the conventions owner."""
+        rows = [
+            line
+            for line in self._read("docs/tool-conventions.md").splitlines()
+            if "validate_runtime(" in line
+        ]
+        self.assertEqual(2, len(rows))
+        joined = "\n".join(rows)
+        forbidden = (
+            "confirm=True",
+            "change_reason",
+            "out_report",
+            "Assets/",
+            "project 内",
+        )
+        self.assertEqual(
+            {token: False for token in forbidden},
+            {token: token in joined for token in forbidden},
+            msg="tool-conventions may classify runtime authority but must link exact tuple/path rules to the API owner.",
+        )
+
+    def test_public_owner_boundaries_do_not_duplicate_runtime_contract(self) -> None:
+        """Catches defaults/execution rules copied out of their owning documents."""
+        readme = self._read("README.md")
+        summary_start = readme.index("Routine CI / agent validation")
+        summary_end = readme.index("\n\n", summary_start)
+        runtime_summary = readme[summary_start:summary_end]
+        conventions = self._read("docs/tool-conventions.md")
+        convention_start = conventions.index("`validate_runtime` は唯一の runtime action")
+        runtime_conventions = conventions[convention_start:]
+        forbidden_readme = (
+            "generated_asset_policy",
+            "allow_dirty_program_assets_before_compile",
+            "allow_dirty_scenes_before_compile",
+            "allow_warnings",
+            "confirm=True",
+            "change_reason",
+            "out_report",
+            "sole loaded active",
+        )
+        forbidden_conventions = (
+            "generated_asset_policy",
+            "allow_dirty_program_assets_before_compile",
+            "allow_dirty_scenes_before_compile",
+            "allow_warnings",
+            "deny | create | replace",
+            "shared preflight",
+        )
+        self.assertEqual(
+            {token: False for token in forbidden_readme},
+            {token: token in runtime_summary for token in forbidden_readme},
+            msg="README must route runtime users without restating audit or execution semantics.",
+        )
+        self.assertEqual(
+            {token: False for token in forbidden_conventions},
+            {token: token in runtime_conventions for token in forbidden_conventions},
+            msg="tool-conventions owns classification, not runtime defaults or execution semantics.",
+        )
+
+    def test_deprecated_runtime_public_tokens_and_rephrased_defaults_are_rejected(self) -> None:
+        """Catches stale aliases, English/Japanese defaults, and contradictory profile prose."""
+        public_text = "\n".join(self._read(relative) for relative in self._PUBLIC_OWNERS)
+        forbidden_tokens = ("run_clientsim", "allow_dirty_before")
+        self.assertEqual(
+            {token: False for token in forbidden_tokens},
+            {token: token in public_text for token in forbidden_tokens},
+            msg="Public owners must not expose removed runtime aliases.",
+        )
+        mutations = (
+            "The default profile is compile_only.",
+            "compile_only is the default runtime profile.",
+            "既定値は compile_only です。",
+            "compile_only を既定の実行経路として使う。",
+            "compile_only is read-only.",
+            "compile_only は read-only profile。",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(
+                    AssertionError,
+                    "implicit compile_only default",
+                ):
+                    self._assert_no_implicit_compile_default(mutation)
+
+
 class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
     def test_runtime_dispatcher_waits_for_clientsim_async_response(self) -> None:
         runtime_source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
         dispatcher_source = _read(TOOLS_DIR / "PrefabSentinel.EditorBridge.cs")
         process_body = _extract_method(dispatcher_source, "ProcessRequest")
+        async_actions = TestRuntimeValidationCompileAuditSource._hashset_body(
+            runtime_source,
+            "AsyncActions",
+        )
 
         self.assertIn(
             'public static readonly HashSet<string> AsyncActions',
@@ -7735,9 +10033,14 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
             msg="Runtime validation must declare its deferred response actions.",
         )
         self.assertIn(
+            '"validate_runtime"',
+            async_actions,
+            msg="The compound runtime action must remain deferred for ClientSim.",
+        )
+        self.assertNotIn(
             '"run_clientsim"',
-            runtime_source,
-            msg="ClientSim must be classified as a deferred runtime response.",
+            async_actions,
+            msg="The removed ClientSim action alias must not retain async authority.",
         )
         self.assertIn(
             "isRuntime\n                && UnityRuntimeValidationBridge.AsyncActions.Contains(header.action)",
@@ -7772,22 +10075,27 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
 
     def test_clientsim_requires_the_requested_scene_to_be_the_only_active_scene(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
-        begin_body = _extract_method(source, "Begin")
+        prepare_body = _extract_method(source, "TryPrepareClientSim")
+        begin_prepared_body = _extract_method(source, "BeginPreparedClientSim")
 
         required_tokens = (
             "SceneManager.sceneCount != 1",
             "SceneManager.GetActiveScene()",
             "activeScene.path",
             "CLIENTSIM_ACTIVE_SCENE_REQUIRED",
-            "EditorSceneManager.playModeStartScene = null",
         )
         for token in required_tokens:
             with self.subTest(token=token):
                 self.assertIn(
                     token,
-                    begin_body,
+                    prepare_body,
                     msg=f"ClientSim active-scene preflight is missing {token!r}.",
                 )
+        self.assertIn(
+            "EditorSceneManager.playModeStartScene = null",
+            begin_prepared_body,
+            msg="The prepared mutation phase must own the temporary start-scene write.",
+        )
 
     def test_clientsim_preflights_runtime_loader_settings_before_play_mode(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
@@ -7808,6 +10116,244 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
                     preflight_body,
                     msg=f"ClientSim package/settings preflight is missing {token!r}.",
                 )
+
+    def test_clientsim_compound_transaction_orders_preflight_compile_and_play(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        compile_source = _read(
+            TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.Compile.cs"
+        )
+        begin_body = _extract_method(source, "Begin")
+        compile_body = _extract_method(
+            compile_source,
+            "ExecuteAuthorizedCompile",
+        )
+        decide_token = "RuntimeValidationTransactionOrder.Decide("
+
+        self.assertEqual(
+            2,
+            source.count(decide_token),
+            msg="Only the compound pre-compile and post-compile decisions own ordering.",
+        )
+        first_decide_index = begin_body.index(decide_token)
+        second_decide_index = begin_body.index(
+            decide_token,
+            first_decide_index + len(decide_token),
+        )
+        prepare_index = begin_body.index("TryPrepareClientSim(")
+        compile_preflight_index = begin_body.index("TryPrepareCompile(")
+        compile_index = begin_body.index("ExecuteAuthorizedCompile(")
+        compile_response_index = begin_body.index("BuildCompileResponse(")
+        client_sim_guard_index = begin_body.index(
+            "if (!postCompileDecision.clientsim_allowed)"
+        )
+        client_sim_index = begin_body.index("BeginPreparedClientSim(")
+        self.assertEqual(
+            sorted(
+                (
+                    prepare_index,
+                    compile_preflight_index,
+                    first_decide_index,
+                    compile_index,
+                    compile_response_index,
+                    second_decide_index,
+                    client_sim_guard_index,
+                    client_sim_index,
+                )
+            ),
+            [
+                prepare_index,
+                compile_preflight_index,
+                first_decide_index,
+                compile_index,
+                compile_response_index,
+                second_decide_index,
+                client_sim_guard_index,
+                client_sim_index,
+            ],
+            msg="Both compound decisions must guard their exact mutation boundary.",
+        )
+        self.assertLess(
+            begin_body.index("if (!preCompileDecision.compile_allowed)"),
+            compile_index,
+        )
+        self.assertLess(
+            compile_body.index("ApplyGeneratedAssetOutcomeValidation(report)"),
+            compile_body.index("return report"),
+            msg=(
+                "the returned compile success flag must include generated-asset "
+                "outcome validation before the second compound decision"
+            ),
+        )
+
+    def test_prepare_clientsim_is_identity_only_and_side_effect_free(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        prepared_body = _extract_class_body(source, "PreparedClientSim")
+        prepare_body = _extract_method(source, "TryPrepareClientSim")
+        request_body = _extract_class_body(source, "RuntimeRequest")
+
+        required_fields = (
+            "SceneAssetPath",
+            "TargetSceneGuid",
+            "PreviousStartSceneWasNull",
+            "PreviousStartSceneGuid",
+            "OperationDeadline",
+            "InitialScenes",
+        )
+        for token in required_fields:
+            with self.subTest(field=token):
+                self.assertIn(token, prepared_body)
+
+        required_preflight_tokens = (
+            "HasPersistedState()",
+            "EditorApplication.isPlayingOrWillChangePlaymode",
+            "SceneManager.sceneCount != 1",
+            "allow_dirty_scenes_before_compile",
+            "TryPreflightClientSim(request)",
+            "EditorSceneManager.playModeStartScene",
+            "AssetDatabase.AssetPathToGUID",
+            "CLIENTSIM_PREFLIGHT_TIMEOUT",
+        )
+        for token in required_preflight_tokens:
+            with self.subTest(preflight=token):
+                self.assertIn(token, prepare_body)
+
+        forbidden_mutations = (
+            "SessionState.SetString",
+            "SaveOperation(",
+            "SaveRestorationLease(",
+            "playModeStartScene =",
+            "EnterPlaymode(",
+            "ExecuteAuthorizedCompile(",
+        )
+        for token in forbidden_mutations:
+            with self.subTest(forbidden=token):
+                self.assertNotIn(token, prepare_body)
+
+        self.assertNotIn(
+            "allow_dirty_before",
+            request_body,
+            msg="The removed legacy dirty flag must not remain a second authority.",
+        )
+
+    def test_all_post_snapshot_precompile_failures_keep_initial_scene_evidence(
+        self,
+    ) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        prepare_body = _extract_method(source, "TryPrepareClientSim")
+        helper_body = _extract_method(source, "AttachPreparedPrecompileFailure")
+        post_snapshot = prepare_body[
+            prepare_body.index(
+                "RuntimeCompileAudit.SceneIdentity[] initialScenes"
+            ) : prepare_body.index("prepared = new PreparedClientSim")
+        ]
+
+        required_failure_evidence = (
+            '"CLIENTSIM_DIRTY_SCENE"',
+            "TryPreflightClientSim(request)",
+            '"CLIENTSIM_START_SCENE_UNRESTORABLE"',
+            '"The ClientSim target scene has no asset GUID."',
+            '"CLIENTSIM_PREFLIGHT_TIMEOUT"',
+        )
+        for token in required_failure_evidence:
+            with self.subTest(token=token):
+                self.assertIn(token, post_snapshot)
+        self.assertEqual(
+            5,
+            post_snapshot.count("failure = AttachPreparedPrecompileFailure("),
+            msg="Every failure after initial Scene capture must retain that snapshot.",
+        )
+        self.assertNotIn("AttachTransactionEvidence(", post_snapshot)
+        required_helper_tokens = (
+            "AttachTransactionEvidence(",
+            "new UnityRuntimeValidationBridge.RuntimeCompileReport()",
+            "initialScenes",
+            "clientSimExecuted: false",
+            "beforeSnapshot: null",
+            "runtimeSnapshot: null",
+            "afterSnapshot: null",
+            "sideEffectReport: null",
+        )
+        for token in required_helper_tokens:
+            with self.subTest(helper_token=token):
+                self.assertIn(token, helper_body)
+
+    def test_begin_prepared_clientsim_captures_fresh_before_then_acquires_lease(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        begin_body = _extract_method(source, "BeginPreparedClientSim")
+        revalidate_body = _extract_method(source, "TryRevalidatePreparedClientSim")
+
+        snapshot_index = begin_body.index("CaptureSceneSnapshot(activeScene)")
+        first_false_index = begin_body.index("clientSimExecuted = false")
+        second_false_index = begin_body.index(
+            "clientSimExecuted = false",
+            first_false_index + 1,
+        )
+        first_lease_save = begin_body.index("SaveRestorationLease(lease)")
+        first_state_save = begin_body.index("SaveOperation(state)")
+        state_executed_index = begin_body.index("state.clientSimExecuted = true")
+        lease_executed_index = begin_body.index("lease.clientSimExecuted = true")
+        second_lease_save = begin_body.index(
+            "SaveRestorationLease(lease)",
+            first_lease_save + 1,
+        )
+        second_state_save = begin_body.index(
+            "SaveOperation(state)",
+            first_state_save + 1,
+        )
+        start_scene_index = begin_body.index(
+            "EditorSceneManager.playModeStartScene = null"
+        )
+        play_index = begin_body.index("EditorApplication.EnterPlaymode()")
+        self.assertLess(first_false_index, first_lease_save)
+        self.assertLess(second_false_index, first_lease_save)
+        self.assertEqual(
+            sorted(
+                (
+                    snapshot_index,
+                    first_lease_save,
+                    first_state_save,
+                    state_executed_index,
+                    lease_executed_index,
+                    second_lease_save,
+                    second_state_save,
+                    start_scene_index,
+                    play_index,
+                )
+            ),
+            [
+                snapshot_index,
+                first_lease_save,
+                first_state_save,
+                state_executed_index,
+                lease_executed_index,
+                second_lease_save,
+                second_state_save,
+                start_scene_index,
+                play_index,
+            ],
+            msg="Reload ownership must persist both false and true execution states before mutation.",
+        )
+        self.assertNotIn("CLIENTSIM_DIRTY_SCENE", revalidate_body)
+        self.assertNotIn("allow_dirty_scenes_before_compile", revalidate_body)
+        self.assertNotIn(
+            ".Dirty",
+            revalidate_body,
+            msg="Post-compile dirtiness must not replace the initial authorization.",
+        )
+
+    def test_compound_evidence_survives_finish_and_lease_only_recovery(self) -> None:
+        source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        finish_body = _extract_method(source, "Finish")
+        corrupt_body = _extract_method(source, "ReconcileCorruptLeaseOnly")
+
+        self.assertIn("AttachTransactionEvidence(", finish_body)
+        self.assertIn("state.compileReport", finish_body)
+        self.assertIn("state.initialSceneSnapshot", finish_body)
+        self.assertIn("AttachTransactionEvidence(", corrupt_body)
+        self.assertIn("lease.compileReport", corrupt_body)
+        self.assertIn("lease.initialSceneSnapshot", corrupt_body)
+        self.assertIn('action = "validate_runtime"', corrupt_body)
+        self.assertIn('profile = "clientsim"', corrupt_body)
 
     def test_play_mode_callback_preserves_terminal_exit_phase(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
@@ -7994,8 +10540,21 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
 
     def test_clientsim_persists_full_operation_and_independent_restoration_lease(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
+        operation_state = _extract_class_body(source, "OperationState")
+        restoration_lease = _extract_class_body(source, "RestorationLease")
 
-        required_tokens = (
+        required_common_tokens = (
+            "compileReport",
+            "initialSceneSnapshot",
+            "clientSimExecuted",
+        )
+        for token in required_common_tokens:
+            with self.subTest(owner="OperationState", token=token):
+                self.assertIn(token, operation_state)
+            with self.subTest(owner="RestorationLease", token=token):
+                self.assertIn(token, restoration_lease)
+
+        required_source_tokens = (
             "OperationStateKey",
             "RestorationLeaseKey",
             "UnityRuntimeValidationBridge.RuntimeRequest request",
@@ -8004,7 +10563,7 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
             "targetSceneGuid",
             "responsePath",
         )
-        for token in required_tokens:
+        for token in required_source_tokens:
             with self.subTest(token=token):
                 self.assertIn(
                     token,
@@ -8081,30 +10640,30 @@ class TestClientSimPlayModeLifecycleSource(unittest.TestCase):
 
     def test_clientsim_deadline_starts_before_snapshot_and_preflight(self) -> None:
         source = _read(TOOLS_DIR / "PrefabSentinel.UnityRuntimeValidationBridge.cs")
-        begin_body = _extract_method(source, "Begin")
+        prepare_body = _extract_method(source, "TryPrepareClientSim")
 
-        deadline_index = begin_body.index("double operationDeadline")
-        snapshot_index = begin_body.index("CaptureSceneSnapshot(activeScene)")
-        preflight_index = begin_body.index("TryPreflightClientSim(request)")
-        lease_index = begin_body.index("SaveRestorationLease(lease)")
+        deadline_index = prepare_body.index("double operationDeadline")
+        snapshot_index = prepare_body.index("new RuntimeCompileAudit.SceneIdentity")
+        preflight_index = prepare_body.index("TryPreflightClientSim(request)")
+        prepared_index = prepare_body.index("prepared = new PreparedClientSim")
         self.assertLess(deadline_index, snapshot_index)
         self.assertLess(deadline_index, preflight_index)
         self.assertIn(
-            "operationDeadline = operationDeadline,",
-            begin_body,
-            msg="The persisted deadline must use the request-start absolute deadline.",
+            "OperationDeadline = operationDeadline,",
+            prepare_body,
+            msg="Prepared identity evidence must retain the request-start absolute deadline.",
         )
-        timeout_guard = begin_body.index(
+        timeout_guard = prepare_body.index(
             "if (EditorApplication.timeSinceStartup >= operationDeadline)"
         )
         self.assertLess(
             timeout_guard,
-            lease_index,
-            msg="Expired preflight must stop before acquiring a restoration lease.",
+            prepared_index,
+            msg="Expired preflight must stop before returning prepared authorization.",
         )
         self.assertIn(
             '"CLIENTSIM_PREFLIGHT_TIMEOUT"',
-            begin_body[timeout_guard:lease_index],
+            prepare_body[timeout_guard:prepared_index],
         )
 
     def test_clientsim_dirty_asset_snapshot_never_loads_every_project_asset(
@@ -8532,6 +11091,396 @@ class TestUnityBridgeCSharpLanguageVersionSource(unittest.TestCase):
                 "nullable-disabled C# so both Unity's default context and the "
                 "nullable-enabled dotnet mirror compile without nullable noise."
             ),
+        )
+
+
+class BridgeDeployPromotionSourceInvariantTests(unittest.TestCase):
+    """Issue #193 private Unity promotion wiring that requires Unity APIs."""
+
+    def _handler(self) -> str:
+        return _extract_method(
+            _strip_cs_comments(_read(BRIDGE_DEPLOY)),
+            "HandlePromoteBridgeBundle",
+        )
+
+    @staticmethod
+    def _is_private_deploy_call(node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        return (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "send_private_deploy_action"
+        ) or (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "send_private_deploy_action"
+        )
+
+    def _assert_python_private_deploy_boundary(
+        self,
+        project_root: Path,
+    ) -> None:
+        session_source = (
+            project_root / "prefab_sentinel" / "mcp_tools_session.py"
+        )
+        public_sources = [
+            *project_root.glob("prefab_sentinel/mcp_tools*.py"),
+            project_root / "prefab_sentinel" / "mcp_server.py",
+        ]
+        registered_tools: set[str] = set()
+        private_calls: list[tuple[Path, ast.Call]] = []
+        approved_literal_locations: list[Path] = []
+        for path in public_sources:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and any(
+                        isinstance(decorator, ast.Call)
+                        and isinstance(decorator.func, ast.Attribute)
+                        and decorator.func.attr == "tool"
+                        for decorator in node.decorator_list
+                    )
+                ):
+                    registered_tools.add(node.name)
+                if self._is_private_deploy_call(node):
+                    if not isinstance(node, ast.Call):
+                        raise AssertionError("private call classifier drifted")
+                    private_calls.append((path, node))
+                if (
+                    isinstance(node, ast.Constant)
+                    and node.value == "promote_bridge_bundle"
+                ):
+                    approved_literal_locations.append(path)
+
+        self.assertNotIn("promote_bridge_bundle", registered_tools)
+        self.assertEqual(
+            1,
+            len(private_calls),
+            "exactly one fixed private deploy call is required",
+        )
+        call_path, private_call = private_calls[0]
+        self.assertEqual(session_source, call_path)
+        self.assertEqual([session_source], approved_literal_locations)
+        action_keywords = [
+            keyword.value
+            for keyword in private_call.keywords
+            if keyword.arg == "action"
+        ]
+        self.assertEqual(1, len(action_keywords))
+        action_keyword = action_keywords[0]
+        self.assertIsInstance(action_keyword, ast.Constant)
+        if not isinstance(action_keyword, ast.Constant):
+            raise AssertionError("private action keyword must be a literal")
+        self.assertEqual(
+            "promote_bridge_bundle",
+            action_keyword.value,
+        )
+
+    def test_private_action_is_internal_only_and_synchronous(self) -> None:
+        private_actions = _action_registry_hashset("Private")
+        supported_actions = _action_registry_hashset("Supported")
+        async_actions = _action_registry_hashset("Async")
+        self.assertIn('"promote_bridge_bundle"', private_actions)
+        self.assertIn('"promote_bridge_bundle"', supported_actions)
+        self.assertNotIn('"promote_bridge_bundle"', async_actions)
+
+        from prefab_sentinel.editor_bridge import SUPPORTED_ACTIONS
+
+        self.assertNotIn("promote_bridge_bundle", SUPPORTED_ACTIONS)
+        project_root = Path(__file__).resolve().parent.parent
+        self._assert_python_private_deploy_boundary(project_root)
+
+    def test_cross_file_private_call_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_root = Path(tmpdir)
+            package = project_root / "prefab_sentinel"
+            package.mkdir()
+            (package / "mcp_tools_session.py").write_text(
+                (
+                    "def deploy():\n"
+                    "    send_private_deploy_action("
+                    "action='promote_bridge_bundle')\n"
+                ),
+                encoding="utf-8",
+            )
+            (package / "mcp_tools_extra_review_probe.py").write_text(
+                (
+                    "def leak():\n"
+                    "    send_private_deploy_action("
+                    "action='different_private_action')\n"
+                ),
+                encoding="utf-8",
+            )
+            (package / "mcp_server.py").write_text("", encoding="utf-8")
+
+            with self.assertRaises(AssertionError) as captured:
+                self._assert_python_private_deploy_boundary(project_root)
+
+        self.assertIn(
+            "exactly one fixed private deploy call",
+            str(captured.exception),
+        )
+
+    def test_request_dto_carries_the_complete_private_promotion_request(self) -> None:
+        body = _extract_editor_control_request_body()
+        for field in (
+            "deploy_run_id",
+            "deploy_target_path",
+            "deploy_transaction_path",
+            "deploy_manifest_sha256",
+            "deploy_bridge_version",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(f"public string {field}", body)
+
+    def test_dispatch_passes_the_full_request_to_the_private_handler(self) -> None:
+        dispatch = _extract_method(_read(BRIDGE), "DispatchAction")
+        self.assertRegex(
+            dispatch,
+            r'case\s+"promote_bridge_bundle"\s*:\s*'
+            r'response\s*=\s*HandlePromoteBridgeBundle\(request\)',
+        )
+
+    def test_handler_validates_before_acquiring_the_refresh_barrier(self) -> None:
+        body = self._handler()
+        validation = body.find("BridgeDeployPromotionRequest.TryCreate")
+        disallow = body.find("AssetDatabase.DisallowAutoRefresh")
+        first_move = body.find("Directory.Move")
+        self.assertNotEqual(-1, validation)
+        self.assertNotEqual(-1, disallow)
+        self.assertNotEqual(-1, first_move)
+        self.assertLess(validation, disallow)
+        self.assertLess(disallow, first_move)
+
+    def test_handler_guards_barrier_acquisition_and_release(self) -> None:
+        body = self._handler()
+        outer_try = body.find("try {")
+        disallow = body.find("AssetDatabase.DisallowAutoRefresh")
+        acquired = body.find("barrierAcquired = true")
+        barrier_catch = _extract_catch_block(
+            body,
+            r"Exception\s+barrierException",
+        )
+        self.assertNotEqual(-1, outer_try)
+        self.assertNotEqual(-1, disallow)
+        self.assertNotEqual(-1, acquired)
+        self.assertLess(outer_try, disallow)
+        self.assertLess(disallow, acquired)
+        self.assertIn("BridgeDeployPromotionResult.BarrierUnavailable", barrier_catch)
+        self.assertIn("Debug.LogError", barrier_catch)
+
+        finally_match = re.search(r"finally\s*\{", body)
+        self.assertIsNotNone(finally_match)
+        if finally_match is None:
+            self.fail("promotion handler must release the barrier in finally")
+        finally_body = _extract_braced_block(
+            body,
+            finally_match.end(),
+            "Bridge deploy barrier finally",
+        )
+        guard = finally_body.find("if (barrierAcquired)")
+        allow = finally_body.find("AssetDatabase.AllowAutoRefresh")
+        self.assertNotEqual(-1, guard)
+        self.assertNotEqual(-1, allow)
+        self.assertLess(guard, allow)
+
+    def test_handler_moves_old_target_before_promoting_staging(self) -> None:
+        body = self._handler()
+        backup_move = body.find(
+            "Directory.Move(promotion.TargetPath, promotion.BackupPath)"
+        )
+        promote_move = body.find(
+            "Directory.Move(promotion.StagingPath, promotion.TargetPath)"
+        )
+        self.assertNotEqual(-1, backup_move)
+        self.assertNotEqual(-1, promote_move)
+        self.assertLess(backup_move, promote_move)
+
+    def test_catch_attempts_rollback_before_projecting_restored_response(self) -> None:
+        body = self._handler()
+        catch_body = _extract_catch_block(body, r"Exception\s+ex")
+        decision = catch_body.find("BridgeDeployPromotionEvidence.DecideRecovery")
+        begin = catch_body.find("TryBeginRollback")
+        rollback_move = catch_body.find("Directory.Move")
+        restored = catch_body.find("BridgeDeployPromotionResult.RolledBack")
+        self.assertNotEqual(-1, decision)
+        self.assertNotEqual(-1, begin)
+        self.assertNotEqual(-1, rollback_move)
+        self.assertNotEqual(-1, restored)
+        self.assertLess(decision, begin)
+        self.assertLess(begin, rollback_move)
+        self.assertLess(rollback_move, restored)
+
+
+    def test_failure_branches_require_exact_filesystem_evidence(self) -> None:
+        body = self._handler()
+        self.assertIn("BridgeDeployPromotionEvidence.DecideRecovery", body)
+        for decision in (
+            "pre_backup_intact",
+            "restore_backup",
+            "move_promoted_then_restore",
+            "ambiguous",
+        ):
+            with self.subTest(decision=decision):
+                self.assertIn(f'\"{decision}\"', body)
+        self.assertIn("BridgeDeployPromotionResult.PreBackupFailed", body)
+        self.assertIn("BridgeDeployPromotionResult.RollbackFailed", body)
+        evidence = body.find("BridgeDeployPromotionEvidence.IsRestoredLayout")
+        rolled_back = body.find("BridgeDeployPromotionResult.RolledBack")
+        self.assertNotEqual(-1, evidence)
+        self.assertNotEqual(-1, rolled_back)
+        self.assertLess(evidence, rolled_back)
+
+    def test_rollback_restore_move_precedes_verification_and_result_projection(
+        self,
+    ) -> None:
+        body = self._handler()
+        rollback_move = body.find(
+            "Directory.Move(\n"
+            "                                    promotion.BackupPath,\n"
+            "                                    promotion.TargetPath)"
+        )
+        verification = body.find(
+            "BridgeDeployPromotionEvidence.IsRestoredLayout"
+        )
+        result_projection = body.find(
+            "BridgeDeployPromotionResult.RolledBack"
+        )
+        self.assertNotEqual(-1, rollback_move)
+        self.assertNotEqual(-1, verification)
+        self.assertNotEqual(-1, result_projection)
+        self.assertLess(rollback_move, verification)
+        self.assertLess(verification, result_projection)
+
+
+    def test_ambiguous_layout_enters_rollback_state_before_failure_projection(self) -> None:
+        body = self._handler()
+        begin = body.find("bool rollbackStarted")
+        begin_call = body.find("promotion.TryBeginRollback", begin)
+        ambiguous = body.find('decision == "ambiguous"')
+        failed = body.find("BridgeDeployPromotionResult.RollbackFailed")
+        self.assertNotEqual(-1, begin)
+        self.assertNotEqual(-1, begin_call)
+        self.assertNotEqual(-1, ambiguous)
+        self.assertNotEqual(-1, failed)
+        self.assertLess(begin, begin_call)
+        self.assertLess(begin_call, ambiguous)
+        self.assertLess(ambiguous, failed)
+
+    def test_refresh_requires_a_promoted_or_verified_rollback_outcome(self) -> None:
+        body = self._handler()
+        refresh_match = re.search(
+            r"AssetDatabase\.Refresh\(\s*"
+            r"ImportAssetOptions\.ForceSynchronousImport\s*\)",
+            body,
+        )
+        requested_refresh = -1 if refresh_match is None else refresh_match.start()
+        promoted_guard = body.find('result.promotion_state == "promoted"')
+        rollback_guard = body.find('result.promotion_state == "rolled_back"')
+        allow = body.find("AssetDatabase.AllowAutoRefresh()")
+        self.assertNotEqual(-1, promoted_guard)
+        self.assertNotEqual(-1, rollback_guard)
+        self.assertNotEqual(-1, allow)
+        self.assertNotEqual(-1, requested_refresh)
+        self.assertLess(requested_refresh, allow)
+        self.assertLess(promoted_guard, requested_refresh)
+        self.assertLess(rollback_guard, requested_refresh)
+
+    def test_refresh_is_bracketed_by_fixed_private_markers_before_release(
+        self,
+    ) -> None:
+        body = self._handler()
+        begin_marker = (
+            'Debug.Log("[PrefabSentinel.EditorBridge] '
+            'Bridge deploy source refresh begin.")'
+        )
+        end_marker = (
+            'Debug.Log("[PrefabSentinel.EditorBridge] '
+            'Bridge deploy source refresh end.")'
+        )
+        refresh_match = re.search(
+            r"AssetDatabase\.Refresh\(\s*"
+            r"ImportAssetOptions\.ForceSynchronousImport\s*\)",
+            body,
+        )
+        self.assertIsNotNone(refresh_match)
+        if refresh_match is None:
+            self.fail("promotion handler must synchronously refresh source inventory")
+        begin = body.find(begin_marker)
+        refresh = refresh_match.start()
+        end = body.find(end_marker)
+        allow = body.find("AssetDatabase.AllowAutoRefresh()")
+        self.assertEqual(1, body.count(begin_marker))
+        self.assertEqual(1, body.count(end_marker))
+        self.assertNotEqual(-1, allow)
+        self.assertEqual(1, body.count("AssetDatabase.AllowAutoRefresh()"))
+        self.assertLess(begin, refresh)
+        self.assertLess(refresh, end)
+        self.assertLess(end, allow)
+
+    def test_refresh_runs_once_only_for_a_complete_target(self) -> None:
+        source = _read(BRIDGE_DEPLOY)
+        body = self._handler()
+        complete_guard = body.find("result.target_complete")
+        refresh_pattern = re.compile(
+            r"AssetDatabase\.Refresh\(\s*"
+            r"ImportAssetOptions\.ForceSynchronousImport\s*\)"
+        )
+        refresh_matches = list(refresh_pattern.finditer(body))
+        requested_refresh = (
+            -1 if not refresh_matches else refresh_matches[0].start()
+        )
+        self.assertNotEqual(-1, complete_guard)
+        self.assertNotEqual(-1, requested_refresh)
+        self.assertEqual(1, len(refresh_matches))
+        self.assertLess(complete_guard, requested_refresh)
+        self.assertIn(
+            "BridgeDeployPromotionResult.CompilationRequestFailed(result)",
+            body,
+        )
+        self.assertNotIn("BridgeDeployPromotionResult.RefreshFailed", body)
+        self.assertNotIn("using UnityEditor.Compilation;", source)
+        self.assertNotIn("EditorApplication.delayCall", source)
+        self.assertNotIn("AssetDatabase.ScheduleRefresh", source)
+        self.assertNotIn("CompilationPipeline.RequestScriptCompilation", source)
+        self.assertNotIn("AssetDatabase.StartAssetEditing", source)
+        self.assertNotIn("AssetDatabase.StopAssetEditing", source)
+        self.assertIn("Bridge asset refresh failed.", body)
+        self.assertNotIn("Bridge script compilation request failed.", body)
+
+    def test_exception_detail_is_console_only_and_never_crosses_response(self) -> None:
+        source = _strip_cs_comments(_read(BRIDGE_DEPLOY))
+        body = _extract_method(source, "HandlePromoteBridgeBundle")
+        catch_body = _extract_catch_block(body, r"Exception\s+ex")
+        self.assertIn("Debug.LogError", catch_body)
+        response_segment = re.sub(
+            r"Debug\.LogError\([^;]*;",
+            "",
+            catch_body,
+        )
+        self.assertNotRegex(response_segment, r"\bex\b|\.Message\b|\.ToString\(")
+        projection = _extract_method(source, "BuildBridgeDeployResponse")
+        for private_path in (
+            "ProjectRoot",
+            "TargetPath",
+            "TransactionPath",
+            "StagingPath",
+            "BackupPath",
+        ):
+            with self.subTest(private_path=private_path):
+                self.assertNotIn(private_path, projection)
+
+    def test_directory_moves_are_owned_by_the_bridge_deploy_partial_only(self) -> None:
+        owners = []
+        for path in TOOLS_DIR.glob("PrefabSentinel.UnityEditorControlBridge*.cs"):
+            if "Directory.Move" in _strip_cs_comments(
+                path.read_text(encoding="utf-8")
+            ):
+                owners.append(path.name)
+        self.assertEqual(
+            ["PrefabSentinel.UnityEditorControlBridge.BridgeDeploy.cs"],
+            owners,
         )
 
 

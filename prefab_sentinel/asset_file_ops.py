@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from pathlib import Path, PureWindowsPath
@@ -12,6 +13,7 @@ from prefab_sentinel.unity_assets import (
     is_unity_text_asset,
 )
 from prefab_sentinel.unity_assets_path import resolve_asset_path
+from prefab_sentinel.unity_yaml_parser import split_yaml_blocks
 from prefab_sentinel.wsl_compat import to_wsl_path
 
 _M_NAME_PATTERN = re.compile(r"(  m_Name: ).*")
@@ -35,6 +37,172 @@ def _rewrite_m_name(text: str, new_name: str) -> tuple[str, str | None, str]:
         return text, old_name, new_name
     replaced = text[: m.end(1)] + new_name + text[m.end() :]
     return replaced, old_name, new_name
+
+
+def _quoted_scalar_end(text: str, start: int) -> int | None:
+    """Locate a quoted scalar's closing delimiter without decoding its value."""
+    quote = text[start]
+    position = start + 1
+    while position < len(text):
+        character = text[position]
+        if quote == '"' and character == "\\":
+            position += 2
+        elif character == quote:
+            if quote == "'" and text[position + 1:position + 2] == "'":
+                position += 2
+            else:
+                return position + 1
+        else:
+            position += 1
+    return None
+
+
+def _flow_value_end(text: str, start: int) -> int | None:
+    """Skip a flow mapping/sequence, including quoted values and nested flows."""
+    openings = [text[start]]
+    position = start + 1
+    plain = False
+    while position < len(text):
+        character = text[position]
+        separator = character in ",[]{}" or (
+            character == ":" and text[position + 1:position + 2].isspace()
+        )
+        if plain and not separator:
+            position += 1
+            continue
+        plain = False
+        if character.isspace() or character in ":,":
+            position += 1
+        elif character in "\"'":
+            end = _quoted_scalar_end(text, position)
+            if end is None:
+                return None
+            position = end
+        elif character in "[{":
+            openings.append(character)
+            position += 1
+        elif character in "]}":
+            if openings.pop() != ({"}": "{", "]": "["}[character]):
+                return None
+            position += 1
+            if not openings:
+                return position
+        else:
+            plain = True
+    return None
+
+
+def _controller_root_names(text: str) -> list[re.Match[str]] | None:
+    """Find root name fields while preserving unrelated scalar boundaries."""
+    # A sequence item's quoted or flow value may contain colons. Do not let
+    # the plain-key branch backtrack over its opening delimiter or sequence marker.
+    field_pattern = re.compile(
+        r'^(?:(?P<indent>[ \t]*)(?P<sequence>-[ \t]+)?'
+        r"""(?P<key>"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:''|[^'\r\n])*'"""
+        r"""|(?![ \t"'\[{]|-[ \t])[^:\r\n]+):[ \t]*"""
+        r'|(?P<item_indent>[ \t]*)-[ \t]+)',
+        re.MULTILINE,
+    )
+    name_pattern = re.compile(r"^  m_Name: ([^\r\n]*)\r?$", re.MULTILINE)
+    names: list[re.Match[str]] = []
+    position = 0
+    while field := field_pattern.search(text, position):
+        is_root_name = (
+            field.group("indent") == "  "
+            and field.group("sequence") is None
+            and field.group("key") == "m_Name"
+        )
+        if is_root_name:
+            name = name_pattern.match(text, field.start())
+            if name is None:
+                return None
+            names.append(name)
+        value_start = field.end()
+        if value_start == len(text):
+            break
+        if text[value_start] in "\"'":
+            end = _quoted_scalar_end(text, value_start)
+        elif text[value_start] in "[{":
+            end = _flow_value_end(text, value_start)
+        else:
+            line_end = text.find("\n", value_start)
+            end = len(text) if line_end < 0 else line_end
+            # Plain scalar continuation is determined by indentation. Quotes
+            # occurring inside that text do not open a different scalar.
+            if text[value_start:end].strip():
+                indent = len(field.group("indent") or field.group("item_indent") or "")
+                continuation_end = end + 1
+                for line in text[continuation_end:].splitlines(keepends=True):
+                    if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                        break
+                    continuation_end += len(line)
+                    if line.strip():
+                        end = continuation_end
+        if end is None:
+            return None
+        if is_root_name and "\n" in text[value_start:end]:
+            return None
+        position = end
+    return names
+
+
+def _rewrite_controller_m_name(
+    text: str, new_name: str,
+    *, invalid_code: str, input_field: str,
+) -> tuple[str, str, dict[str, str]] | dict:
+    """Rewrite the uniquely identified Controller root name (Issues #228/#239)."""
+    blocks = split_yaml_blocks(text)
+    # Unity's YAML Class ID Reference identifies AnimatorController as 91;
+    # document order and the first m_Name do not identify the main object.
+    controllers = [block for block in blocks if block.class_id == "91" and not block.is_stripped]
+
+    def invalid(reason: str) -> dict:
+        return _error_dict(
+            invalid_code,
+            "Controller main object cannot be identified safely.",
+            data={
+                "field": input_field, "reason": reason,
+                "matching_document_count": len(controllers),
+            },
+        )
+
+    if len(controllers) != 1:
+        return invalid("main_object_not_unique")
+    controller = controllers[0]
+    if (
+        controller.text.splitlines()[1:2] != ["AnimatorController:"]
+        or sum(block.file_id == controller.file_id for block in blocks) != 1
+    ):
+        return invalid("main_object_identity_invalid")
+
+    names = _controller_root_names(controller.text)
+    if names is None or len(names) != 1:
+        return invalid("root_name_invalid")
+    name = names[0]
+    old_name = name.group(1)
+    if not old_name.strip() or old_name[0] in "|>&*!{[":
+        return invalid("root_name_invalid")
+    if old_name[0] in "\"'" and (len(old_name) < 2 or old_name[-1] != old_name[0]):
+        return invalid("root_name_invalid")
+    following = next(
+        (line for line in controller.text[name.end():].splitlines() if line.strip()), "",
+    )
+    if len(following) - len(following.lstrip()) > 2:
+        return invalid("root_name_invalid")
+
+    # Splice just this scalar; leave every other document and reference intact.
+    # JSON quoting is valid YAML 1.1. Preserve plain/canonical-quoted no-ops
+    # without claiming to decode every YAML source scalar grammar.
+    quoted_name = json.dumps(new_name, ensure_ascii=False)
+    new_scalar = old_name if old_name in (new_name, quoted_name) else quoted_name
+    block_start = text.index(controller.text)
+    start, end = block_start + name.start(1), block_start + name.end(1)
+    return text[:start] + new_scalar + text[end:], old_name, {
+        "class_id": controller.class_id,
+        "file_id": controller.file_id,
+        "type_name": "AnimatorController",
+        "property_path": "m_Name",
+    }
 
 
 def _generate_guid() -> str:
@@ -350,7 +518,19 @@ def copy_asset(
 
     text = decode_text_file(src)
     new_stem = dest.stem
-    new_text, old_name, new_name = _rewrite_m_name(text, new_stem)
+    old_name: str | None
+    name_target = None
+    if src.suffix.lower() == ".controller":
+        controller_name = _rewrite_controller_m_name(
+            text, new_stem,
+            invalid_code="ASSET_COPY_MAIN_OBJECT_INVALID", input_field="source_path",
+        )
+        if isinstance(controller_name, dict):
+            return controller_name
+        new_text, old_name, name_target = controller_name
+        new_name = new_stem
+    else:
+        new_text, old_name, new_name = _rewrite_m_name(text, new_stem)
     if old_name is None:
         diagnostics.append({
             "detail": "m_name_not_found",
@@ -363,7 +543,9 @@ def copy_asset(
         "m_name_before": old_name,
         "m_name_after": new_name,
     }
-    if old_name is not None and old_name == new_name:
+    if name_target is not None:
+        data["m_name_target"] = name_target
+    if old_name is not None and new_text == text:
         data["m_name_unchanged"] = True
 
     if dry_run:
@@ -546,7 +728,19 @@ def rename_asset(
 
     text = decode_text_file(src)
     new_stem = new_path.stem
-    new_text, old_name, applied_name = _rewrite_m_name(text, new_stem)
+    old_name: str | None
+    name_target = None
+    if src.suffix.lower() == ".controller":
+        controller_name = _rewrite_controller_m_name(
+            text, new_stem,
+            invalid_code="ASSET_RENAME_MAIN_OBJECT_INVALID", input_field="asset_path",
+        )
+        if isinstance(controller_name, dict):
+            return controller_name
+        new_text, old_name, name_target = controller_name
+        applied_name = new_stem
+    else:
+        new_text, old_name, applied_name = _rewrite_m_name(text, new_stem)
 
     diagnostics: list[dict[str, str]] = []
     if old_name is None:
@@ -560,7 +754,9 @@ def rename_asset(
         "m_name_before": old_name,
         "m_name_after": applied_name,
     }
-    if old_name is not None and old_name == applied_name:
+    if name_target is not None:
+        data["m_name_target"] = name_target
+    if old_name is not None and new_text == text:
         data["m_name_unchanged"] = True
 
     try:

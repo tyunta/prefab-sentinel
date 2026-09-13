@@ -16,6 +16,7 @@ from contextlib import AbstractContextManager
 from unittest.mock import MagicMock, patch
 
 from prefab_sentinel import mcp_tools_editor_exec, mcp_tools_editor_view
+from tests._assertion_helpers import assert_error_envelope
 
 
 def _background_deferred_envelope(
@@ -1249,6 +1250,10 @@ class EditorRunScriptPollTests(unittest.TestCase):
     * A valid identifier forwards the request id and the
       cleanup-on-timeout flag verbatim.
     * A bridge envelope carrying a status passes through unchanged.
+    * An invalid-completion failure keeps its exact typed evidence and
+      carries no raw stdout channel.
+    * A completion-read failure keeps its state-unknown write classification
+      without exposing private artifact details.
     """
 
     _VALID_ID = "0123456789abcdef0123456789abcdef"
@@ -1310,6 +1315,99 @@ class EditorRunScriptPollTests(unittest.TestCase):
         self.assertEqual(
             "completed", resp["data"]["status"],
             msg="Poll must pass the bridge status through unchanged.",
+        )
+
+    def test_poll_preserves_invalid_completion_failure_without_raw_stdout(self) -> None:
+        invalid_completion = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_COMPLETION_INVALID",
+            "message": (
+                "RunScript completion could not be interpreted; "
+                "execution outcome is unknown."
+            ),
+            "data": {
+                "request_id": self._VALID_ID,
+                "status": "failed",
+                "executed": False,
+                "state_unknown": True,
+                "read_only": False,
+            },
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_exec,
+            "send_action",
+            return_value=invalid_completion,
+        ):
+            response = mcp_tools_editor_exec.editor_run_script_poll(self._VALID_ID)
+
+        assert_error_envelope(
+            response,
+            code="EDITOR_CTRL_RUN_SCRIPT_COMPLETION_INVALID",
+            severity="error",
+            message_match=(
+                r"^RunScript completion could not be interpreted; "
+                r"execution outcome is unknown\.$"
+            ),
+            data={
+                "request_id": self._VALID_ID,
+                "status": "failed",
+                "executed": False,
+                "state_unknown": True,
+                "read_only": False,
+            },
+        )
+        self.assertEqual([], response["diagnostics"])
+        self.assertNotIn("stdout", response["data"])
+
+    def test_poll_preserves_completion_read_failure_without_private_details(self) -> None:
+        completion_read_failure = {
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_CTRL_RUN_SCRIPT_COMPLETION_READ_FAILED",
+            "message": (
+                "RunScript completion could not be read; "
+                "execution outcome is unknown."
+            ),
+            "data": {
+                "request_id": self._VALID_ID,
+                "status": "failed",
+                "executed": False,
+                "state_unknown": True,
+                "read_only": False,
+            },
+            "diagnostics": [],
+        }
+        with patch.object(
+            mcp_tools_editor_exec,
+            "send_action",
+            return_value=completion_read_failure,
+        ):
+            response = mcp_tools_editor_exec.editor_run_script_poll(self._VALID_ID)
+
+        assert_error_envelope(
+            response,
+            code="EDITOR_CTRL_RUN_SCRIPT_COMPLETION_READ_FAILED",
+            severity="error",
+            message_match=(
+                r"^RunScript completion could not be read; "
+                r"execution outcome is unknown\.$"
+            ),
+            data={
+                "request_id": self._VALID_ID,
+                "status": "failed",
+                "executed": False,
+                "state_unknown": True,
+                "read_only": False,
+            },
+        )
+        self.assertEqual([], response["diagnostics"])
+        self.assertEqual(
+            set(),
+            {"stdout", "path", "exception", "artifact"}.intersection(
+                response["data"]
+            ),
         )
 
 

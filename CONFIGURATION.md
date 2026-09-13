@@ -8,7 +8,7 @@
 - transport は stdio が既定。HTTP を使う場合は `--transport streamable-http --port <port>` を指定する。port の既定値は `8000`、受理範囲は `1..65535`。
 - HTTP host は `127.0.0.1`、path は `/mcp` に固定する。host / path の CLI option や環境変数はなく、public bind、TLS、OAuth / authentication をこの server に設定することはできない。
 - 公開 contract は Tools-only surface。stdio は `2026-07-28`、`2025-11-25`、`2025-06-18` を modern-first で受理し、HTTP と modern discovery は `2026-07-28` のみを受理する。user-facing compatibility flag はない。
-- Codex distribution の `.codex-plugin/mcp.json` だけが declarative な `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` marker を持つ。これは配布定義に宣言する MCP host 向け marker であり、server runtime は検査しない。Claude の MCP launch definition は marker を持たず、変更しない。
+- Codex distribution の `.codex-plugin/mcp.json` だけが declarative な `CODEX_MCP_PROTOCOL_VERSION=2026-07-28` marker を持つ。これは Codex が server 起動前に解釈する marker であり、server runtime は検査しない。Claude の MCP launch definition は marker を持たず、変更しない。
 - `ProjectSession` は process-wide application state で、request / network client ごとに生成する設定はない。`activate_project` の結果を後続 request が暗黙利用する continuity は deliberate product constraint かつ MCP 2026-07-28 stateless model からの既知逸脱であり、これを conformance option で無効化する設定もない。1 logical client / project scope ごとに server process を分離する。起動例と transport semantics は [docs/execution-reference.md](./docs/execution-reference.md#実行方法)、責務境界は [ARCHITECTURE.md](./ARCHITECTURE.md#mcpserver--protocol-boundary) を参照。
 
 ## 環境変数一覧
@@ -19,6 +19,7 @@
 |--------|--------|------|------|-----------|
 | `UNITYTOOL_BRIDGE_E2E_LIVE` | （未設定） | 値 `"1"` で `tests/test_mcp_server.py` の live Editor Bridge E2E テストを有効化する opt-in ゲート。未設定時は該当テストが skip される。 | test-only | #270 |
 | `UNITYTOOL_BRIDGE_WATCH_DIR` | （未設定 = fail-fast） | 常駐 Editor Bridge との file-IPC watch ディレクトリ。Python 側が `{uuid}.request.json` を書き込み、Editor Bridge が `{uuid}.response.json` をアトミック書き出しで返す。未設定時は `BRIDGE_WATCH_DIR_MISSING` で fail-fast 停止する。 | active | #88, #89, #270 |
+| `UNITYTOOL_BRIDGE_INSTANCE_ID` | （未設定 = fail-fast） | Unity Editor OS process ごとに Bridge が生成する 32 桁 lowercase hex の instance ID。手入力値ではなく、Editor Bridge の `Copy Connection Info` または Codex command copy control から取得する。Unity Editor を再起動したら新しい値で MCP process も再起動する。 | active | #179 |
 | `UNITYTOOL_CI_BRANCH` | （未設定。`GITHUB_REF_NAME` をフォールバック） | CI 上の現在ブランチ名。`<scope>/config/ignore_guids.txt` の auto-update（`suggest ignore-guids --out-ignore-guid-file`）の許可ブランチ判定で参照される想定。現コードベースでは `suggest ignore-guids --out-ignore-guid-file` 自体が未実装のため、参照箇所はまだ存在しない（AGENTS.md / README.md の仕様記述のみ）。 | planned | #237 |
 | `UNITYTOOL_IGNORE_GUID_ALLOW_BRANCHES` | `main,release/*` | ignore-guid file の auto-update を許可するブランチパターンのカンマ区切り上書き。明示指定時のみ、許可ブランチ上でのみ ignore-guid file が更新される想定。現コードベースでは未参照（AGENTS.md / README.md の仕様記述のみ）。 | planned | #237 |
 | `UNITYTOOL_PATCH_BRIDGE` | （未設定） | 非 JSON resource（`.prefab` / `.unity` / `.mat` / `.asset` / `.anim` / `.controller`）の patch 適用に使う外部 bridge コマンドを `shlex` 形式で指定する。未設定で非 JSON resource を扱おうとすると `SER_UNSUPPORTED_TARGET` で停止する。受理コマンドは allowlist（`python` / `uv` / `prefab-sentinel-unity-bridge` 等）に限定される。 | active | — |
@@ -27,6 +28,49 @@
 | `UNITYTOOL_UNITY_LOG_FILE` | （未設定） | `collect_unity_console` / `validate_runtime` が読む Unity Editor ログファイルパス。`runtime_root` 配下の絶対パスに正規化される（外指定は `RUN_CONFIG_ERROR`）。 | active | — |
 | `UNITYTOOL_UNITY_PROJECT_PATH` | （未設定。`activate_project` の引数優先） | Unity プロジェクトルート（`Assets/` の親）。WSL 環境では Windows パス（`D:/...`）と WSL パス（`/mnt/d/...`）の両方を受け付ける（`prefab_sentinel/wsl_compat.py`）。 | active | — |
 | `UNITYTOOL_UNITY_TIMEOUT_SEC` | `120` | Editor Bridge のレスポンスファイル出現を待つポーリング上限秒数。整数値で指定する（不正値・非正値はパスに応じて `BRIDGE_TIMEOUT_INVALID` / `EDITOR_BRIDGE_TIMEOUT_INVALID` / `RUN_CONFIG_ERROR` のエラーエンベロープで拒否され、silent fallback はしない）。既定値はパスごとに異なり、patch bridge が `120`、`prefab_sentinel.editor_bridge` が `30`、`runtime_validation` 経路が `300`。 | active | — |
+
+## Editor Bridge の接続設定
+
+Editor Bridge の Watch Directory と Enabled は Unity project root でスコープされた `EditorPrefs` key に保存する。複数の Unity project を同時に開いても、一方の設定を他方へ継承しない。project-local 設定がない初回起動では `<project-root>/Library/PrefabSentinel/BridgeWatch` を作成して有効化し、明示保存済みの custom path や disabled 状態は上書きしない。
+
+Bridge instance ID は入力設定ではない。Unity Editor OS process ごとに生成される read-only identity であり、Editor Bridge window の `Bridge Instance ID` 表示と `Copy Instance ID` から取得する。`Copy Connection Info` は project root / Watch Directory / instance ID を一括コピーする。`Copy Codex Command (WSL / Bash)` と `Copy Codex Command (PowerShell)` は、3つの process-local 環境変数を設定して project root から `codex` を起動する command をコピーし、永続的な shell 設定は変更しない。
+
+instance ID は `SessionState` に保持するため managed-domain / assembly reload では変わらない。Unity Editor を OS process として再起動すると `SessionState` が消去され、instance ID が変わる。OS process 再起動後は connection info または launch command を再コピーし、既存 MCP process を retarget せず新しい binding で起動し直す。
+
+## Watch identity private artifacts
+
+`UNITYTOOL_BRIDGE_WATCH_DIR` の physical directory には、32桁 lowercase hex の `.prefab-sentinel-watch-identity` marker を一つだけ保持する。Unity Editor Bridge は configured directory の marker を確認し、project root の `Library/PrefabSentinel/bridge-status-v1.json` へ private heartbeat を書く。status は最大 4096 bytes、Bridge の publication interval は 1000 ms、Python host の freshness window は 5000 ms（境界を含む）で固定され、いずれも環境変数で変更しない。watch directory が異なることを fresh status が証明した場合だけ、host は public `EDITOR_BRIDGE_WATCH_DIR_MISMATCH` / `misconfigured` を返す。
+
+Public logs and MCP responses must not expose marker IDs、watch paths、timestamps、private status content、raw exceptions。private diagnostic logs may include artifact paths and raw exceptions for failed filesystem operations, but must not include marker identities or private status content。host と Unity の両方で同じ directory を設定し、異常時に directory を自動探索・自動置換・再設定しない。
+
+## Bridge deployment ownership and target rules
+
+`deploy_bridge` の既定 target は `Assets/Editor/PrefabSentinel`。ownership の project-private 正本は `Library/PrefabSentinel/deploy-ownership-v1.json` で、normalized project-relative target ごとに deployed Bridge version、source manifest、owned `.meta`、明示的に所有する parent sibling、最後に成功した transaction ID を保持する。path、raw JSON、transaction/backup location は public response に出さない。
+
+- **fresh target**: absent または empty target は受理する。complete staging を同一 filesystem の directory rename で設置し、final byte verification と ownership publication が終わって初めて owned になる。
+- **recorded target**: record にある source / `.meta` だけを replace または remove できる。未記録 file、directory、symlink、reparse point、record と byte identity の不一致は mutation 前に fail closed する。
+- **legacy default target**: ownership record のない nonempty target を import できるのは、exact `Assets/Editor/PrefabSentinel` かつ root entries が `PrefabSentinel.*.cs`、`PrefabSentinel.Editor.asmdef`、対応 `.meta` の regular non-link set だけの場合。これは historical dedicated target に限定した bounded migration である。
+- **custom or broad target**: `Assets/ExampleProject` など nonempty custom target は、既存 ownership record がなければ内容が product-shaped でも拒否する。directory location や filename glob から ownership を推測しない。
+- **parent siblings**: 親 directory の Bridge-looking entry は ownership record が exact relative entry を所有していない限り conflict として停止する。parent glob deletion は行わず、未所有 sibling を自動 cleanup しない。
+
+nonempty existing target の更新は、接続中 Bridge が private `promote_bridge_bundle` action を実装している場合だけ許可する。旧 Bridge が action を持たない場合は target mutation 前に `DEPLOY_BARRIER_UNAVAILABLE` で停止する。これは意図した compatibility boundary であり、旧 delete-then-copy fallback はない。既存 target の利用者は新 Bridge を一度だけ別手順で配置する one-time bootstrap が必要で、bootstrap 自体は safe redeploy の受入証跡に数えない。absent target の first install はこの action を必要としない。
+
+## Local Unity Bridge acceptance inputs (Issue #186)
+
+`scripts/run_unity_bridge_acceptance.py` reads explicit CLI inputs, not an ambient authorization environment variable. `--confirm-live` is mandatory and is the sole operator opt-in for the bounded fixture mutation; omitting it returns `ACCEPTANCE_OPT_IN_REQUIRED` before activation, deploy, request artifacts, or fixtures exist.
+
+| CLI input | Required value / constraint | Relationship to configuration |
+|---|---|---|
+| `--project-root` | Existing Unity project root (`Assets/` parent) | Must equal the running Editor project; it has the same address meaning as `UNITYTOOL_UNITY_PROJECT_PATH`, but is explicit for the invocation. |
+| `--scope` | Project-relative `Assets/...` scope | Becomes the MCP acceptance session scope. |
+| `--target-dir` | Absolute safe-deploy target under `<project-root>/Assets` accepted by #193 | The command never implements a second deploy algorithm. |
+| `--watch-dir` | Existing configured Bridge watch directory | Must identify the live Editor Bridge; it is not auto-discovered or replaced. The acceptance transport passes this value both to its MCP child and directly to its process-local private acceptance actions without mutating the parent process environment, so concurrent transports can target different Editors. |
+| `--unity-log-file` | Existing readable regular file containing the Editor log for append-only compile evidence, whose startup `-projectPath` equals `--project-root`; special files such as FIFOs are rejected without waiting for log input | It is a command input, not a replacement for normal `UNITYTOOL_UNITY_LOG_FILE` configuration. When multiple Editors run, launch the target Editor with Unity's [`-logFile <pathname>`](https://docs.unity3d.com/2022.3/Documentation/Manual/EditorCommandLineArguments.html) so each project has a unique log. |
+| `--out-report` | Project-contained path outside `Assets/`, exclusively reservable | The exact terminal `unity_bridge_acceptance.v1` JSON is atomically published here. |
+| `--confirm-live` | Explicit flag | Required for every live mutation path. |
+| `--recover-run-id` | Optional exact 32-character lowercase hexadecimal ID | With `--confirm-live`, performs recovery-only status/cleanup/postcheck for that existing lease and then stops; it never starts a new run. |
+
+Before deployment the command rejects a dirty managed source surface, an unavailable Editor, a Unity log whose startup `-projectPath` does not equal the requested project, dirty or unsaved loaded Scenes, dirty Prefab Stage, dirty native serialized assets, play/compile/build state, or an unavailable report reservation. Imported source objects such as `.shader` are not native serialized assets and do not constitute a save blocker solely because their loaded object is dirty. After safe deployment and reload, but before fixture mutation, it requires the new Bridge status to match the active project, report Unity `2022.3.*`, and expose ready VRChat SDK Base/Worlds/UdonSharp versions. This split is deliberate: an older #193-compatible Bridge can prove the pre-deploy safety state but cannot expose fields introduced by #186. Because safe deployment and acceptance cleanup can temporarily remove the heartbeat while Unity refreshes assets, the post-reload environment and terminal postcondition gates poll only structured `connection_state="unavailable"` once per second for at most 120 seconds. Any other blocker or readiness failure remains fail-fast. No fallback Editor, alternative watch directory, phase restart, save, or revert is permitted. #193 and #194 are dependencies for accepted live evidence, not configuration substitutes.
 
 ## ignore_guids.txt 形式仕様
 
@@ -151,6 +195,8 @@ An unsafe, conflicting, or invalid project-local profile blocks bundled fallback
 | `editor_move_asset` | ✅ | ✅ `out_report` |
 | `revert_overrides` | ✅ | — |
 | `patch_apply` | ✅ | ✅ (confirmed exactly one open Prefab only) |
+| `validate_runtime(profile="compile_only")` | ✅ | ✅ |
+| `validate_runtime(profile="clientsim")` | ✅ | ✅ |
 | `vrcsdk_upload` | ✅ | — |
 | `editor_run_script` | ✅ | — |
 | `editor_run_script_submit` | ✅ | — |
@@ -167,7 +213,9 @@ An unsafe, conflicting, or invalid project-local profile blocks bundled fallback
 
 issue #49 で `editor_execute_menu_item` / `editor_safe_save_prefab` / `editor_create_udon_program_asset` / `editor_create_scene` / `editor_save_scene` が監査ペア対象へ追加された（逆不可逆性原理: arbitrary code 実行・非 Undo の asset 改変）。`editor_batch_set_blend_shape` / `editor_apply_animation_clip` は Undo 可能な scene 変更のため監査ペア対象外（`confirm` / `change_reason` を渡すと `TypeError`）。
 
-`validate_runtime(profile="clientsim")` も ClientSim が Play Mode と scene dirty state に触れうるため `confirm=True` + 非空 `change_reason` を要求する。既定 profile は `compile_only` で、ClientSim は明示 profile なしには実行されない。さらに requested scene は sole loaded active scene でなければならず、ClientSim package/public lifecycle API と `ClientSimSettings.Instance.enableClientSim` を Play 前に検査する。操作 timeout は request 受理時からの Unity 側 preflight/enter/ready 共通 deadline で、preflight 中に期限切れなら Play Mode へ入らない。file transport は cleanup 30 秒 + dispatch 5 秒を別に待つ。
+`validate_runtime` は `profile` の明示指定が必須で、省略時は `RUN_PROFILE_REQUIRED` で停止する。`compile_only` / `clientsim` は副作用を持つ write profile のため、どちらも `confirm=True` + 非空 `change_reason` + project root 内かつ `Assets/` 外の `out_report` を要求する。report は mutation 前に排他予約され、`runtime_validation_report.v1` に compile / ClientSim の副作用を分離して記録する。`editor_console_only` は read-only で、監査ペアと report は不要。旧既定 profile の案内を廃止し、現行 contract に同期した。詳細は [docs/execution-reference.md の Unity bridge / runtime 節](./docs/execution-reference.md#unity-bridge--runtime) を参照。
+
+`clientsim` では requested scene が sole loaded active scene でなければならず、ClientSim package/public lifecycle API と `ClientSimSettings.Instance.enableClientSim` を Play 前に検査する。操作 timeout は request 受理時からの Unity 側 preflight/enter/ready 共通 deadline で、preflight 中に期限切れなら Play Mode へ入らない。file transport は cleanup 30 秒 + dispatch 5 秒を別に待つ。
 
 `editor_serialized_property_read` / `editor_serialized_property_list` は read-only なので audit pair 対象外。`editor_serialized_property_write` は dry-run 既定だが、`confirm=True` の確定書き込みでは Undo / dirty / Prefab override state に触れるため `change_reason` を必須にする。
 

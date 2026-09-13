@@ -17,7 +17,9 @@ from prefab_sentinel.editor_bridge import (
     SUPPORTED_ACTIONS,
     bridge_status,
     check_editor_bridge_env,
+    get_last_bridge_version,
     send_action,
+    send_private_acceptance_action,
 )
 from prefab_sentinel.editor_bridge_builders import build_create_empty_kwargs, build_set_camera_kwargs
 from prefab_sentinel.unity_assets_path import resolve_asset_path
@@ -74,7 +76,7 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
         )
 
     def test_watch_dir_status_probe_error_emits_watch_dir_not_found(self) -> None:
-        secret = "/secret/watch-dir-status"
+        secret = "ISSUE162_SECRET_PROBE_ERROR"
         with tempfile.TemporaryDirectory() as tmp:
             watch_dir = Path(tmp)
             original_is_dir = Path.is_dir
@@ -97,6 +99,8 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
             finally:
                 Path.is_dir = original_is_dir  # type: ignore[assignment]
 
+        public_wire = json.dumps(result)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
             (
                 "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
@@ -109,48 +113,59 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
                 },
                 False,
                 False,
-                [
-                    "ERROR:prefab_sentinel.editor_bridge:"
-                    "Editor Bridge watch directory status probe failed"
-                ],
+                True,
+                True,
             ),
             (
                 result["code"],
                 result["data"],
-                secret in json.dumps(result),
-                str(watch_dir) in json.dumps(result),
-                captured.output,
+                secret in public_wire,
+                str(watch_dir) in public_wire,
+                secret in private_log,
+                str(watch_dir) in private_log,
             ),
-            msg=f"watch-dir status failures must redact transport details: {result!r}",
+            msg=f"public status must redact transport details while private logs retain them: {result!r}",
         )
 
     def test_bridge_status_probe_error_reports_disconnected(self) -> None:
+        secret = "ISSUE162_SECRET_BRIDGE_STATUS"
         with tempfile.TemporaryDirectory() as tmp:
             watch_dir = Path(tmp)
             original_is_dir = Path.is_dir
 
             def fail_watch_dir_probe(path: Path) -> bool:
                 if path == watch_dir:
-                    raise OSError("stat failed")
+                    raise OSError(secret)
                 return original_is_dir(path)
 
             try:
                 Path.is_dir = fail_watch_dir_probe  # type: ignore[assignment]
-                with patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(watch_dir)}):
+                with (
+                    patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: str(watch_dir)}),
+                    self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+                ):
                     status = bridge_status()
-            except OSError as exc:
-                status = {"connected": "raised", "watch_dir_status_error": str(exc)}
             finally:
                 Path.is_dir = original_is_dir  # type: ignore[assignment]
 
+        public_wire = json.dumps(status)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
-            (False, str(watch_dir), "stat failed"),
-            (
-                status["connected"],
-                status["watch_dir"],
-                status.get("watch_dir_status_error"),
-            ),
+            {
+                "connected": False,
+                "connection_state": "unavailable",
+                "code": "EDITOR_BRIDGE_WATCH_DIR_NOT_FOUND",
+                "blocker_class": "watch_dir",
+                "suggested_next_action": (
+                    "Set UNITYTOOL_BRIDGE_WATCH_DIR to an existing Editor Bridge watch directory."
+                ),
+            },
+            status,
         )
+        self.assertNotIn(secret, public_wire)
+        self.assertNotIn(str(watch_dir), public_wire)
+        self.assertIn(secret, private_log)
+        self.assertIn(str(watch_dir), private_log)
 
     def test_wsl_conversion_applied_in_check_editor_bridge_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -173,8 +188,33 @@ class TestCheckEditorBridgeEnv(unittest.TestCase):
             ):
                 with patch("prefab_sentinel.editor_bridge.to_wsl_path", return_value=tmpdir) as mock_to_wsl_path:
                     result = bridge_status()
-                    self.assertTrue(result["connected"])
+                    self.assertEqual(
+                        {
+                            "connected": True,
+                            "connection_state": "connected",
+                            "code": None,
+                            "blocker_class": None,
+                            "suggested_next_action": None,
+                        },
+                        result,
+                    )
                     mock_to_wsl_path.assert_called_with("D:\\Project\\Watch")
+
+    def test_bridge_status_uses_captured_watch_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {}, clear=True):
+                result = bridge_status(Path(tmpdir))
+
+        self.assertEqual(
+            {
+                "connected": True,
+                "connection_state": "connected",
+                "code": None,
+                "blocker_class": None,
+                "suggested_next_action": None,
+            },
+            result,
+        )
 
     def test_wsl_conversion_applied_in_send_action(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,6 +258,22 @@ class TestSendAction(unittest.TestCase):
             result = send_action(action="capture_screenshot")
             self.assertFalse(result["success"])
             self.assertEqual("EDITOR_BRIDGE_WATCH_DIR_MISSING", result["code"])
+
+    def test_explicit_watch_directory_does_not_require_process_environment(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(
+                os.environ,
+                {BRIDGE_WATCH_DIR_ENV: ""},
+                clear=False,
+            ):
+                result = send_private_acceptance_action(
+                    action="not-a-private-action",
+                    watch_dir=Path(tmpdir),
+                )
+
+        self.assertEqual("EDITOR_BRIDGE_UNKNOWN_ACTION", result["code"])
 
     def test_zero_timeout_sec_rejected_at_boundary(self) -> None:
         """``timeout_sec <= 0`` is rejected with a dedicated envelope
@@ -308,15 +364,108 @@ class TestSendAction(unittest.TestCase):
             msg=f"timeout failures must retain safe context without request paths: {result!r}",
         )
 
+
+    def test_publication_failure_marker_returns_typed_failure_and_cleans_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            responder_errors: list[BaseException] = []
+
+            import threading
+
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fail_publication() -> None:
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected request file before publication failure"
+                        )
+
+                    request_file = observed_request["path"]
+                    request_id = request_file.name.removesuffix(".request.json")
+                    response_tmp = watch_dir / f"{request_id}.response.json.tmp"
+                    failure_marker = (
+                        watch_dir / f"{request_id}.publication-failed.json"
+                    )
+                    response_tmp.write_text("PRIVATE_PARTIAL_RESPONSE", encoding="utf-8")
+                    original_rename(request_file, failure_marker)
+                except BaseException as exc:
+                    responder_errors.append(exc)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                thread = threading.Thread(target=fail_publication)
+                thread.start()
+                result = send_action(
+                    action="capture_screenshot",
+                    timeout_sec=2,
+                )
+                thread.join()
+
+                if responder_errors:
+                    raise responder_errors[0]
+
+                self.assertEqual([], responder_errors)
+                self.assertEqual(
+                    {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "success": False,
+                        "severity": "error",
+                        "code": "EDITOR_BRIDGE_RESPONSE_PUBLICATION_FAILED",
+                        "message": (
+                            "Editor Bridge processed the request but could not "
+                            "publish its response."
+                        ),
+                        "data": {
+                            "action": "capture_screenshot",
+                            "state_unknown": True,
+                        },
+                        "diagnostics": [],
+                    },
+                    result,
+                )
+                self.assertEqual([], list(watch_dir.iterdir()))
+                self.assertNotIn(tmpdir, json.dumps(result))
+                self.assertNotIn("PRIVATE_PARTIAL_RESPONSE", json.dumps(result))
+
     def test_deleted_watch_directory_after_preflight_is_not_recreated(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             watch_dir = Path(temp_dir) / "watch"
             watch_dir.mkdir()
             check_count = 0
 
-            def validate_then_delete() -> dict[str, object] | None:
+            def validate_then_delete(
+                captured_watch_dir: Path | None | object,
+            ) -> dict[str, object] | None:
                 nonlocal check_count
-                result = check_editor_bridge_env()
+                result = check_editor_bridge_env(captured_watch_dir)
                 if check_count == 0:
                     watch_dir.rmdir()
                 check_count += 1
@@ -363,7 +512,7 @@ class TestSendAction(unittest.TestCase):
         )
 
     def test_response_poll_exists_failure_returns_envelope_and_cleans_request(self) -> None:
-        secret = "/secret/response-status"
+        secret = "ISSUE162_SECRET_RESPONSE_STATUS"
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
             original_exists = Path.exists
@@ -395,6 +544,8 @@ class TestSendAction(unittest.TestCase):
                 if path.name.endswith(".request.json")
             ]
 
+        public_wire = json.dumps(result)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
             (
                 False,
@@ -402,24 +553,25 @@ class TestSendAction(unittest.TestCase):
                 {},
                 [],
                 False,
-                [
-                    "ERROR:prefab_sentinel.editor_bridge:"
-                    "Editor Bridge response status probe failed"
-                ],
+                False,
+                True,
+                True,
             ),
             (
                 result["success"],
                 result["code"],
                 result["data"],
                 remaining_requests,
-                secret in json.dumps(result),
-                captured.output,
+                secret in public_wire,
+                tmpdir in public_wire,
+                secret in private_log,
+                tmpdir in private_log,
             ),
-            msg=f"response status failures must be sanitized and cleaned up: {result!r}",
+            msg=f"response status failures must be sanitized, privately diagnosable, and cleaned up: {result!r}",
         )
 
     def test_response_read_failure_redacts_transport_details(self) -> None:
-        secret = "/secret/response-read"
+        secret = "ISSUE162_SECRET_RESPONSE_READ"
         with tempfile.TemporaryDirectory() as tmpdir:
             watch_dir = Path(tmpdir)
             original_exists = Path.exists
@@ -436,14 +588,22 @@ class TestSendAction(unittest.TestCase):
                     clear=False,
                 ),
                 patch.object(Path, "exists", response_is_ready),
-                patch.object(Path, "read_text", side_effect=OSError(secret)),
-                self.assertLogs("prefab_sentinel.editor_bridge", level="ERROR") as captured,
+                patch(
+                    "prefab_sentinel.bridge_response_io.os.open",
+                    side_effect=OSError(secret),
+                ),
+                self.assertLogs(
+                    "prefab_sentinel.editor_bridge",
+                    level="ERROR",
+                ) as captured,
             ):
                 result = send_action(
                     action="capture_screenshot",
                     timeout_sec=1,
                 )
 
+        public_wire = json.dumps(result)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
             (
                 False,
@@ -451,24 +611,85 @@ class TestSendAction(unittest.TestCase):
                 {},
                 False,
                 False,
-                [
-                    "ERROR:prefab_sentinel.editor_bridge:"
-                    "Editor Bridge response read failed"
-                ],
+                True,
+                True,
             ),
             (
                 result["success"],
                 result["code"],
                 result["data"],
-                secret in json.dumps(result),
-                tmpdir in json.dumps(result),
-                captured.output,
+                secret in public_wire,
+                tmpdir in public_wire,
+                secret in private_log,
+                tmpdir in private_log,
             ),
-            msg=f"response read failures must redact exception and path details: {result!r}",
+            msg=(
+                "response read failures must redact public details and retain "
+                f"private evidence: {result!r}"
+            ),
+        )
+
+    def test_response_close_failure_remains_typed_and_redacted(self) -> None:
+        secret = "ISSUE163_SECRET_EDITOR_CLOSE"
+        closed_fds: list[int] = []
+        real_close = os.close
+
+        def close_then_fail(fd: int) -> None:
+            closed_fds.append(fd)
+            real_close(fd)
+            raise OSError(secret)
+
+        class CloseFailingOs:
+            def __getattr__(self, name: str) -> Any:
+                return getattr(os, name)
+
+            def close(self, fd: int) -> None:
+                close_then_fail(fd)
+
+        response_payload: dict[str, object] = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_EDITOR_STATE_OK",
+            "message": "ok",
+            "data": {},
+            "diagnostics": [],
+        }
+        with (
+            patch(
+                "prefab_sentinel.bridge_response_io.os",
+                CloseFailingOs(),
+            ),
+            self.assertLogs(
+                "prefab_sentinel.editor_bridge",
+                level="ERROR",
+            ) as captured,
+        ):
+            result = self._send_with_fake_response(response_payload)
+
+        public_wire = json.dumps(result)
+        private_log = "\n".join(captured.output)
+        self.assertEqual(
+            (
+                False,
+                "EDITOR_BRIDGE_RESPONSE_READ",
+                "Editor bridge response file could not be read.",
+                1,
+                False,
+                True,
+            ),
+            (
+                result["success"],
+                result["code"],
+                result["message"],
+                len(closed_fds),
+                secret in public_wire,
+                secret in private_log,
+            ),
+            msg=f"close failure must remain a redacted transport error: {result!r}",
         )
 
     def test_request_write_failure_includes_watch_dir_blocker(self) -> None:
-        secret = "/secret/request-write"
+        secret = "ISSUE162_SECRET_REQUEST_WRITE"
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
                 patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
@@ -478,6 +699,8 @@ class TestSendAction(unittest.TestCase):
                 result = send_action(action="capture_screenshot", timeout_sec=1)
             remaining_files = sorted(path.name for path in Path(tmpdir).iterdir())
 
+        public_wire = json.dumps(result)
+        private_log = "\n".join(captured.output)
         self.assertEqual(
             (
                 False,
@@ -491,22 +714,22 @@ class TestSendAction(unittest.TestCase):
                 False,
                 False,
                 [],
-                [
-                    "ERROR:prefab_sentinel.editor_bridge:"
-                    "Editor Bridge request write failed"
-                ],
+                True,
+                True,
             ),
             (
                 result["success"],
                 result["code"],
                 result["data"],
-                secret in json.dumps(result),
-                tmpdir in json.dumps(result),
+                secret in public_wire,
+                tmpdir in public_wire,
                 remaining_files,
-                captured.output,
+                secret in private_log,
+                tmpdir in private_log,
             ),
             msg=(
-                f"request write failures must redact paths and remove temporary transport files: {result!r}"
+                f"request write failures must redact public details, retain private evidence, "
+                f"and remove temporary transport files: {result!r}"
             ),
         )
 
@@ -526,45 +749,52 @@ class TestSendAction(unittest.TestCase):
             def notifying_rename(self_path: Path, target: str | Path) -> Path:
                 renamed_path = original_rename(self_path, target)
                 target_path = Path(target)
-                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
                     with request_ready:
                         observed_request["path"] = target_path
                         request_ready.notify_all()
                 return renamed_path
 
-            def fake_send():
+            def fake_send() -> None:
                 """Write a fake response after observing the request file."""
-                with request_ready:
-                    request_seen = request_ready.wait_for(
-                        lambda: "path" in observed_request,
-                        timeout=2,
-                    )
-                if not request_seen:
-                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
-                    return
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected request file before fake Unity response"
+                        )
 
-                request_file = observed_request["path"]
-                base = request_file.name.replace(".request.json", "")
-                seen_request_id["value"] = base
-                resp_path = watch_dir / f"{base}.response.json"
-                resp = {
-                    "protocol_version": PROTOCOL_VERSION,
-                    "success": True,
-                    "severity": "info",
-                    "code": "EDITOR_CTRL_SCREENSHOT_OK",
-                    "message": "Screenshot captured",
-                    "data": {
-                        "output_path": "/tmp/test.png",
-                        "view": "scene",
-                        "width": 800,
-                        "height": 600,
-                        "executed": True,
-                    },
-                    "diagnostics": [],
-                }
-                tmp_resp_path = Path(str(resp_path) + ".tmp")
-                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
-                tmp_resp_path.rename(resp_path)
+                    request_file = observed_request["path"]
+                    base = request_file.name.replace(".request.json", "")
+                    seen_request_id["value"] = base
+                    resp_path = watch_dir / f"{base}.response.json"
+                    resp = {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "success": True,
+                        "severity": "info",
+                        "code": "EDITOR_CTRL_SCREENSHOT_OK",
+                        "message": "Screenshot captured",
+                        "data": {
+                            "output_path": "/tmp/test.png",
+                            "view": "scene",
+                            "width": 800,
+                            "height": 600,
+                            "executed": True,
+                        },
+                        "diagnostics": [],
+                    }
+                    resp_tmp_path = watch_dir / f"{base}.response.json.tmp"
+                    resp_tmp_path.write_text(json.dumps(resp), encoding="utf-8")
+                    os.replace(resp_tmp_path, resp_path)
+                except BaseException as exc:
+                    responder_errors.append(exc)
 
             with (
                 patch.dict(
@@ -585,6 +815,8 @@ class TestSendAction(unittest.TestCase):
                 )
                 t.join()
 
+                if responder_errors:
+                    raise responder_errors[0]
                 self.assertEqual([], responder_errors)
                 self.assertTrue(result["success"])
                 self.assertEqual("EDITOR_CTRL_SCREENSHOT_OK", result["code"])
@@ -606,46 +838,55 @@ class TestSendAction(unittest.TestCase):
             def notifying_rename(self_path: Path, target: str | Path) -> Path:
                 renamed_path = original_rename(self_path, target)
                 target_path = Path(target)
-                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
                     with request_ready:
                         observed_request["path"] = target_path
                         request_ready.notify_all()
                 return renamed_path
 
             def fake_send() -> None:
-                with request_ready:
-                    request_seen = request_ready.wait_for(
-                        lambda: "path" in observed_request,
-                        timeout=2,
-                    )
-                if not request_seen:
-                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
-                    return
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected request file before fake Unity response"
+                        )
 
-                request_file = observed_request["path"]
-                base = request_file.name.replace(".request.json", "")
-                resp_path = watch_dir / f"{base}.response.json"
-                resp = {
-                    "protocol_version": PROTOCOL_VERSION,
-                    "success": False,
-                    "severity": "error",
-                    "code": "EDITOR_CTRL_SCENE_BUSY",
-                    "message": "Unity is compiling.",
-                    "data": {
-                        "editor_state": {
-                            "is_compiling": True,
-                            "is_building_player": False,
-                            "state_source": "live_editor",
-                        }
-                    },
-                    "diagnostics": [],
-                }
-                tmp_resp_path = Path(str(resp_path) + ".tmp")
-                tmp_resp_path.write_text(json.dumps(resp), encoding="utf-8")
-                tmp_resp_path.rename(resp_path)
+                    request_file = observed_request["path"]
+                    base = request_file.name.replace(".request.json", "")
+                    resp_path = watch_dir / f"{base}.response.json"
+                    resp = {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "success": False,
+                        "severity": "error",
+                        "code": "EDITOR_CTRL_SCENE_BUSY",
+                        "message": "Unity is compiling.",
+                        "data": {
+                            "editor_state": {
+                                "is_compiling": True,
+                                "is_building_player": False,
+                                "state_source": "live_editor",
+                            }
+                        },
+                        "diagnostics": [],
+                    }
+                    resp_path.write_text(json.dumps(resp), encoding="utf-8")
+                except BaseException as exc:
+                    responder_errors.append(exc)
 
             with (
-                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
                 patch.object(Path, "rename", notifying_rename),
             ):
                 t = threading.Thread(target=fake_send)
@@ -653,6 +894,8 @@ class TestSendAction(unittest.TestCase):
                 result = send_action(action="capture_screenshot", timeout_sec=5)
                 t.join()
 
+        if responder_errors:
+            raise responder_errors[0]
         self.assertEqual([], responder_errors)
         self.assertEqual(
             (
@@ -666,6 +909,351 @@ class TestSendAction(unittest.TestCase):
                 result["data"].get("suggested_next_action"),
             ),
         )
+
+    def _send_with_fake_response(
+        self,
+        response_payload: dict[str, object],
+    ) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            watch_dir = Path(tmpdir)
+            responder_errors: list[BaseException] = []
+
+            import threading
+
+            request_ready = threading.Condition()
+            observed_request: dict[str, Path] = {}
+            original_rename = Path.rename
+
+            def notifying_rename(self_path: Path, target: str | Path) -> Path:
+                renamed_path = original_rename(self_path, target)
+                target_path = Path(target)
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
+                    with request_ready:
+                        observed_request["path"] = target_path
+                        request_ready.notify_all()
+                return renamed_path
+
+            def fake_send() -> None:
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected request file before fake Unity response"
+                        )
+
+                    request_file = observed_request["path"]
+                    request_id = request_file.name.removesuffix(".request.json")
+                    response_file = watch_dir / f"{request_id}.response.json"
+                    response_tmp_file = watch_dir / f"{request_id}.response.json.tmp"
+                    response_tmp_file.write_text(
+                        json.dumps(response_payload),
+                        encoding="utf-8",
+                    )
+                    os.replace(response_tmp_file, response_file)
+                except BaseException as exc:
+                    responder_errors.append(exc)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
+                patch.object(Path, "rename", notifying_rename),
+            ):
+                responder = threading.Thread(target=fake_send)
+                responder.start()
+                result = send_action(
+                    action="get_editor_state",
+                    timeout_sec=5,
+                )
+                responder.join()
+
+        if responder_errors:
+            raise responder_errors[0]
+        self.assertEqual([], responder_errors)
+        return result
+
+    def test_fake_responder_publishes_only_closed_complete_response(self) -> None:
+        import threading
+
+        from prefab_sentinel.bridge_response_io import read_bridge_response_file
+
+        write_started = threading.Event()
+        consumer_observed = threading.Event()
+        original_write_text = Path.write_text
+        original_exists = Path.exists
+
+        def paused_response_write(
+            self_path: Path,
+            data: str,
+            encoding: str | None = None,
+            errors: str | None = None,
+            newline: str | None = None,
+        ) -> int:
+            if ".response.json" not in self_path.name:
+                return original_write_text(
+                    self_path, data, encoding=encoding, errors=errors, newline=newline,
+                )
+            with self_path.open(
+                "w", encoding=encoding, errors=errors, newline=newline,
+            ) as stream:
+                # Force the consumer to poll while the response writer is open.
+                write_started.set()
+                self.assertTrue(consumer_observed.wait(timeout=2))
+                return stream.write(data)
+
+        def poll_during_write(self_path: Path) -> bool:
+            if not self_path.name.endswith(".response.json"):
+                return original_exists(self_path)
+            self.assertTrue(write_started.wait(timeout=2))
+            exists = original_exists(self_path)
+            if not exists:
+                consumer_observed.set()
+            return exists
+
+        def read_before_writer_resumes(response_path: Path) -> object:
+            try:
+                return read_bridge_response_file(response_path)
+            finally:
+                consumer_observed.set()
+
+        response_payload: dict[str, object] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "ok",
+            "data": {"executed": True},
+            "diagnostics": [],
+        }
+        with (
+            patch.object(Path, "write_text", paused_response_write),
+            patch.object(Path, "exists", poll_during_write),
+            patch(
+                "prefab_sentinel.editor_bridge.read_bridge_response_file",
+                read_before_writer_resumes,
+            ),
+        ):
+            with self.subTest(responder="common helper"):
+                result = self._send_with_fake_response(response_payload)
+                self.assertEqual(
+                    (True, "EDITOR_CTRL_STATE_OK", {"executed": True}),
+                    (result["success"], result["code"], result["data"]),
+                )
+
+            write_started.clear()
+            consumer_observed.clear()
+            with self.subTest(responder="standalone screenshot"):
+                self.test_response_read_successfully()
+
+    def test_fake_responder_reraises_serialization_errors(self) -> None:
+        response_payload: dict[str, object] = {
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "ok",
+            "data": {"unserializable": object()},
+            "diagnostics": [],
+        }
+
+        with self.assertRaisesRegex(
+            TypeError,
+            "^Object of type object is not JSON serializable$",
+        ):
+            self._send_with_fake_response(response_payload)
+
+    def test_rejects_malformed_common_envelopes_without_version_update(self) -> None:
+        base: dict[str, object] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "ok",
+            "data": {},
+            "diagnostics": [],
+            "bridge_version": "poison-version",
+        }
+        rows = [
+            ("string success", {**base, "success": "false"}),
+            ("numeric success", {**base, "success": 1}),
+            (
+                "missing data",
+                {key: value for key, value in base.items() if key != "data"},
+            ),
+            ("unknown severity", {**base, "severity": "fatal"}),
+            ("successful error", {**base, "severity": "error"}),
+        ]
+
+        for label, response_payload in rows:
+            with (
+                self.subTest(label=label),
+                patch(
+                    "prefab_sentinel.editor_bridge._last_bridge_version",
+                    "known-good",
+                ),
+            ):
+                result = self._send_with_fake_response(response_payload)
+
+                self.assertEqual(
+                    (False, "error", "EDITOR_BRIDGE_RESPONSE_SCHEMA"),
+                    (
+                        result["success"],
+                        result["severity"],
+                        result["code"],
+                    ),
+                )
+                self.assertEqual("known-good", get_last_bridge_version())
+
+    def test_valid_warning_failure_is_preserved_without_version_update(self) -> None:
+        response_payload: dict[str, object] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": False,
+            "severity": "warning",
+            "code": "EDITOR_DEFERRED",
+            "message": "not complete",
+            "data": {},
+            "diagnostics": [],
+            "bridge_version": "failure-version",
+        }
+
+        with patch(
+            "prefab_sentinel.editor_bridge._last_bridge_version",
+            "known-good",
+        ):
+            result = self._send_with_fake_response(response_payload)
+
+            self.assertEqual(
+                response_payload,
+                {key: result[key] for key in response_payload},
+            )
+            self.assertEqual("known-good", get_last_bridge_version())
+
+
+    def test_protocol_v2_outer_error_is_preserved_and_v1_is_rejected(self) -> None:
+        outer_failure: dict[str, object] = {
+            "protocol_version": 2,
+            "success": False,
+            "severity": "error",
+            "code": "EDITOR_BRIDGE_ERROR",
+            "message": "Editor Bridge request processing failed.",
+            "data": {"read_only": True, "executed": False},
+            "diagnostics": [],
+        }
+
+        current = self._send_with_fake_response(outer_failure)
+        legacy = self._send_with_fake_response(
+            {**outer_failure, "protocol_version": 1}
+        )
+
+        self.assertEqual(
+            (
+                False,
+                2,
+                "EDITOR_BRIDGE_ERROR",
+                "Editor Bridge request processing failed.",
+            ),
+            (
+                current["success"],
+                current["protocol_version"],
+                current["code"],
+                current["message"],
+            ),
+        )
+        self.assertEqual(
+            (False, "EDITOR_BRIDGE_RESPONSE_SCHEMA"),
+            (legacy["success"], legacy["code"]),
+        )
+
+    def test_success_updates_only_from_non_empty_string_bridge_version(self) -> None:
+        base: dict[str, object] = {
+            "protocol_version": PROTOCOL_VERSION,
+            "success": True,
+            "severity": "info",
+            "code": "EDITOR_CTRL_STATE_OK",
+            "message": "ok",
+            "data": {},
+            "diagnostics": [],
+        }
+        rows = [
+            ("non-empty string", "2.0.0", "2.0.0"),
+            ("empty string", "", "known-good"),
+            ("non-string", 7, "known-good"),
+        ]
+
+        for label, bridge_version, expected in rows:
+            with (
+                self.subTest(label=label),
+                patch(
+                    "prefab_sentinel.editor_bridge._last_bridge_version",
+                    "known-good",
+                ),
+            ):
+                self._send_with_fake_response(
+                    {**base, "bridge_version": bridge_version}
+                )
+
+                self.assertEqual(expected, get_last_bridge_version())
+
+    def test_watch_directory_identity_is_observed_once_per_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            original_watch_dir = root / "original"
+            replacement_watch_dir = root / "replacement"
+            original_watch_dir.mkdir()
+            replacement_watch_dir.mkdir()
+            probed_paths: list[Path] = []
+            request_targets: list[Path] = []
+            original_is_dir = Path.is_dir
+            original_rename = Path.rename
+
+            def mutate_env_after_first_preflight(path: Path) -> bool:
+                result = original_is_dir(path)
+                probed_paths.append(path)
+                if len(probed_paths) == 1:
+                    os.environ[BRIDGE_WATCH_DIR_ENV] = str(replacement_watch_dir)
+                return result
+
+            def record_request_target(
+                source: Path,
+                target: str | Path,
+            ) -> Path:
+                target_path = Path(target)
+                if target_path.name.endswith(".request.json"):
+                    request_targets.append(target_path.parent)
+                return original_rename(source, target)
+
+            with (
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: str(original_watch_dir)},
+                    clear=False,
+                ),
+                patch.object(
+                    Path,
+                    "is_dir",
+                    mutate_env_after_first_preflight,
+                ),
+                patch.object(Path, "rename", record_request_target),
+            ):
+                result = send_action(
+                    action="capture_screenshot",
+                    timeout_sec=1,
+                )
+
+        self.assertEqual("EDITOR_BRIDGE_TIMEOUT", result["code"])
+        self.assertEqual(
+            [original_watch_dir, original_watch_dir],
+            probed_paths,
+        )
+        self.assertEqual([original_watch_dir], request_targets)
 
 
 class EditorBridgeBlockerDiagnosticTests(unittest.TestCase):
@@ -754,38 +1342,51 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
             def notifying_rename(self_path: Path, target: str | Path) -> Path:
                 renamed_path = original_rename(self_path, target)
                 target_path = Path(target)
-                if target_path.parent == watch_dir and target_path.name.endswith(".request.json"):
+                if (
+                    target_path.parent == watch_dir
+                    and target_path.name.endswith(".request.json")
+                ):
                     with request_ready:
                         observed_request["path"] = target_path
                         request_ready.notify_all()
                 return renamed_path
 
             def fake_send() -> None:
-                with request_ready:
-                    request_seen = request_ready.wait_for(
-                        lambda: "path" in observed_request,
-                        timeout=2,
-                    )
-                if not request_seen:
-                    responder_errors.append(AssertionError("Expected request file before fake Unity response"))
-                    return
+                try:
+                    with request_ready:
+                        request_seen = request_ready.wait_for(
+                            lambda: "path" in observed_request,
+                            timeout=2,
+                        )
+                    if not request_seen:
+                        raise AssertionError(
+                            "Expected request file before fake Unity response"
+                        )
 
-                request_file = observed_request["path"]
-                request_id = request_file.name.removesuffix(".request.json")
-                seen_request_id["value"] = request_id
-                seen_request_payload.update(json.loads(request_file.read_text(encoding="utf-8")))
-                response = dict(response_payload)
-                response.setdefault("protocol_version", PROTOCOL_VERSION)
-                response_file = watch_dir / f"{request_id}.response.json"
-                tmp_response_file = Path(str(response_file) + ".tmp")
-                tmp_response_file.write_text(
-                    json.dumps(response),
-                    encoding="utf-8",
-                )
-                tmp_response_file.rename(response_file)
+                    request_file = observed_request["path"]
+                    request_id = request_file.name.removesuffix(".request.json")
+                    seen_request_id["value"] = request_id
+                    seen_request_payload.update(
+                        json.loads(request_file.read_text(encoding="utf-8"))
+                    )
+                    response = dict(response_payload)
+                    response.setdefault("protocol_version", PROTOCOL_VERSION)
+                    response_file = watch_dir / f"{request_id}.response.json"
+                    tmp_response_file = Path(str(response_file) + ".tmp")
+                    tmp_response_file.write_text(
+                        json.dumps(response),
+                        encoding="utf-8",
+                    )
+                    tmp_response_file.rename(response_file)
+                except BaseException as exc:
+                    responder_errors.append(exc)
 
             with (
-                patch.dict(os.environ, {BRIDGE_WATCH_DIR_ENV: tmpdir}, clear=False),
+                patch.dict(
+                    os.environ,
+                    {BRIDGE_WATCH_DIR_ENV: tmpdir},
+                    clear=False,
+                ),
                 patch.object(Path, "rename", notifying_rename),
             ):
                 t = threading.Thread(target=fake_send)
@@ -798,7 +1399,9 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
                     )
                 else:
                     if not isinstance(expected_project_root, str):
-                        raise AssertionError("expected_project_root must be a string when provided")
+                        raise AssertionError(
+                            "expected_project_root must be a string when provided"
+                        )
                     result = send_action(
                         action="get_editor_state",
                         timeout_sec=5,
@@ -807,28 +1410,38 @@ class BridgeProjectRootMismatchTests(unittest.TestCase):
                     )
                 t.join()
 
+        if responder_errors:
+            raise responder_errors[0]
         self.assertEqual([], responder_errors)
         return result, seen_request_id["value"], seen_request_payload
 
     def test_mismatching_project_root_returns_typed_error_with_identity(self) -> None:
         expected_root = "/workspace/ExpectedProject"
         actual_root = "/workspace/OtherProject"
-        result, request_id, request_payload = self._send_with_fake_response(
-            {
-                "success": True,
-                "severity": "info",
-                "code": "EDITOR_CTRL_STATE_OK",
-                "message": "Editor state captured",
-                "data": {"is_playing": False},
-                "diagnostics": [],
-                "operator_context": {
-                    "project_root": actual_root,
-                    "bridge_session_id": "bridge-session-1",
-                    "bridge_instance_id": "bridge-instance-1",
+        with patch(
+            "prefab_sentinel.editor_bridge._last_bridge_version",
+            "known-good",
+        ):
+            result, request_id, request_payload = self._send_with_fake_response(
+                {
+                    "success": True,
+                    "severity": "info",
+                    "code": "EDITOR_CTRL_STATE_OK",
+                    "message": "Editor state captured",
+                    "data": {"is_playing": False},
+                    "diagnostics": [],
+                    "bridge_version": "poison-version",
+                    "operator_context": {
+                        "project_root": actual_root,
+                        "bridge_session_id": "bridge-session-1",
+                        "bridge_instance_id": "bridge-instance-1",
+                        "bridge_version": "poison-version",
+                    },
                 },
-            },
-            expected_project_root=expected_root,
-        )
+                expected_project_root=expected_root,
+            )
+
+            self.assertEqual("known-good", get_last_bridge_version())
 
         self.assertEqual(False, result["success"], result)
         self.assertEqual("EDITOR_BRIDGE_PROJECT_ROOT_MISMATCH", result["code"])

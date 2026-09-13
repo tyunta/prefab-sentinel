@@ -208,15 +208,22 @@ class CLIProcess:
 def running_mcp_cli(
     *arguments: str,
     pipe_stdin: bool = False,
+    _startup_probe: bool = False,
 ) -> Iterator[CLIProcess]:
-    """Launch the installed module and always reap it with useful failure output."""
+    """Launch the MCP CLI and always reap it with useful failure output.
+
+    ``_startup_probe`` is a test-only import-plus-main launcher.  The default
+    remains the real ``-m prefab_sentinel.mcp_server`` entry point.
+    """
 
     environment = os.environ.copy()
     environment.pop("UNITYTOOL_BRIDGE_WATCH_DIR", None)
     environment.pop("UNITYTOOL_UNITY_PROJECT_PATH", None)
     environment["PYTHONUNBUFFERED"] = "1"
+    module = "tests._mcp_startup_probe" if _startup_probe else "prefab_sentinel.mcp_server"
+    launch_started_wall = time.monotonic()
     process = subprocess.Popen(
-        [sys.executable, "-m", "prefab_sentinel.mcp_server", *arguments],
+        [sys.executable, "-m", module, *arguments],
         stdin=subprocess.PIPE if pipe_stdin else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -224,22 +231,40 @@ def running_mcp_cli(
         encoding="utf-8",
         env=environment,
     )
+    launch_returned_wall = time.monotonic()
     child = CLIProcess(process)
     error: Exception | None = None
     cleanup_error: Exception | None = None
+    failure_observed_wall: float | None = None
+    final_exit_observed_wall: float | None = None
     try:
         yield child
     except Exception as exc:  # Assertions are re-raised with child diagnostics.
         error = exc
+        failure_observed_wall = time.monotonic()
     finally:
         try:
             child.stop()
         except Exception as exc:
             cleanup_error = exc
+        if child.returncode is not None:
+            final_exit_observed_wall = time.monotonic()
 
     if error is not None:
         cleanup_note = f"\ncleanup error: {cleanup_error}" if cleanup_error else ""
-        raise AssertionError(f"{error}{cleanup_note}\nchild stderr:\n{child.stderr or '<empty>'}") from error
+        parent_timing = json.dumps(
+            {
+                "launch_started_wall": launch_started_wall,
+                "launch_returned_wall": launch_returned_wall,
+                "failure_observed_wall": failure_observed_wall,
+                "final_exit_observed_wall": final_exit_observed_wall,
+            },
+            separators=(",", ":"),
+        )
+        raise AssertionError(
+            f"{error}{cleanup_note}\nparent timing: {parent_timing}"
+            f"\nchild stderr:\n{child.stderr or '<empty>'}"
+        ) from error
     if cleanup_error is not None:
         raise AssertionError(
             f"child cleanup failed: {cleanup_error}\nchild stderr:\n{child.stderr or '<empty>'}"
@@ -404,6 +429,17 @@ def assert_jsonrpc_error(
     return typed_error
 
 
+def modern_meta(version: str = MCP_PROTOCOL_VERSION) -> dict[str, object]:
+    return {
+        "io.modelcontextprotocol/protocolVersion": version,
+        "io.modelcontextprotocol/clientInfo": {
+            "name": "transport-tests",
+            "version": "1",
+        },
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+
+
 def legacy_initialize_request(
     *,
     request_id: int | str = 1,
@@ -418,16 +454,6 @@ def legacy_initialize_request(
             "capabilities": {},
             "clientInfo": {"name": "transport-tests", "version": "1"},
         },
-    }
-
-def modern_meta(version: str = MCP_PROTOCOL_VERSION) -> dict[str, object]:
-    return {
-        "io.modelcontextprotocol/protocolVersion": version,
-        "io.modelcontextprotocol/clientInfo": {
-            "name": "transport-tests",
-            "version": "1",
-        },
-        "io.modelcontextprotocol/clientCapabilities": {},
     }
 
 

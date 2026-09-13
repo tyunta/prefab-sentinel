@@ -1,0 +1,390 @@
+{
+  "schema_version": "tool-discovery-query-fixture.v1",
+  "corpus_invariants": {
+    "ambiguous_pair_id": "symbol-discovery",
+    "read_only_pair_id": "broken-refs-readonly",
+    "dangerous_operation_pair_id": "world-upload"
+  },
+  "cases": [
+    {
+      "id": "component-add-ja",
+      "pair_id": "component-add",
+      "language": "ja",
+      "query": "保存済み Prefab アセット内の一つの GameObject にコンポーネントを追加したい。開いているシーンは変更しない。",
+      "accepted_tools": ["add_component"],
+      "forbidden_tools": ["editor_add_component"],
+      "safety_critical": true,
+      "rationale": "saved asset component addition"
+    },
+    {
+      "id": "component-add-en",
+      "pair_id": "component-add",
+      "language": "en",
+      "query": "Add one component to a GameObject in a saved Prefab asset without changing the open scene.",
+      "accepted_tools": ["add_component"],
+      "forbidden_tools": ["editor_add_component"],
+      "safety_critical": true,
+      "rationale": "saved asset component addition"
+    },
+    {
+      "id": "asset-copy-safe-ja",
+      "pair_id": "asset-copy-safe",
+      "language": "ja",
+      "query": "アセットを新しい project-relative の場所へ複製したい。元と複製先のどちらも削除しない。",
+      "accepted_tools": ["copy_asset"],
+      "forbidden_tools": ["delete_asset", "delete_assets"],
+      "safety_critical": true,
+      "rationale": "copy without deletion"
+    },
+    {
+      "id": "asset-copy-safe-en",
+      "pair_id": "asset-copy-safe",
+      "language": "en",
+      "query": "Copy an asset to a new project-relative location without removing either source or destination assets.",
+      "accepted_tools": ["copy_asset"],
+      "forbidden_tools": ["delete_asset", "delete_assets"],
+      "safety_critical": true,
+      "rationale": "copy without deletion"
+    },
+    {
+      "id": "generated-render-texture-ja",
+      "pair_id": "generated-render-texture",
+      "language": "ja",
+      "query": "指定パラメータで新しい RenderTexture アセットを生成したい。",
+      "accepted_tools": ["editor_create_generated_asset"],
+      "forbidden_tools": ["editor_move_asset"],
+      "safety_critical": true,
+      "rationale": "confirmed generated asset creation"
+    },
+    {
+      "id": "generated-render-texture-en",
+      "pair_id": "generated-render-texture",
+      "language": "en",
+      "query": "Create a new RenderTexture asset with the supplied parameters.",
+      "accepted_tools": ["editor_create_generated_asset"],
+      "forbidden_tools": ["editor_move_asset"],
+      "safety_critical": true,
+      "rationale": "confirmed generated asset creation"
+    },
+    {
+      "id": "saved-property-set-ja",
+      "pair_id": "saved-property-set",
+      "language": "ja",
+      "query": "保存済み Prefab の serialized field を一つ変更して保存したい。",
+      "accepted_tools": ["set_property"],
+      "forbidden_tools": ["set_properties"],
+      "safety_critical": true,
+      "rationale": "confirmed saved field mutation"
+    },
+    {
+      "id": "saved-property-set-en",
+      "pair_id": "saved-property-set",
+      "language": "en",
+      "query": "Change and save one serialized field in a saved Prefab.",
+      "accepted_tools": ["set_property"],
+      "forbidden_tools": ["set_properties"],
+      "safety_critical": true,
+      "rationale": "confirmed saved field mutation"
+    },
+    {
+      "id": "broken-refs-readonly-ja",
+      "pair_id": "broken-refs-readonly",
+      "language": "ja",
+      "query": "壊れた GUID または fileID 参照を、何も変更せずに調べたい。",
+      "accepted_tools": ["validate_refs"],
+      "forbidden_tools": ["patch_apply", "set_property"],
+      "safety_critical": true,
+      "rationale": "read-only broken reference inspection"
+    },
+    {
+      "id": "broken-refs-readonly-en",
+      "pair_id": "broken-refs-readonly",
+      "language": "en",
+      "query": "Inspect broken GUID or fileID references without changing anything.",
+      "accepted_tools": ["validate_refs"],
+      "forbidden_tools": ["patch_apply", "set_property"],
+      "safety_critical": true,
+      "rationale": "read-only broken reference inspection"
+    },
+    {
+      "id": "inspector-surface-ja",
+      "pair_id": "inspector-surface",
+      "language": "ja",
+      "query": "コンポーネントの保存済み raw serialized surface と object reference を確認したい。",
+      "accepted_tools": ["inspect_serialized_surface"],
+      "forbidden_tools": ["set_property"],
+      "safety_critical": true,
+      "rationale": "read-only serialized surface inspection"
+    },
+    {
+      "id": "inspector-surface-en",
+      "pair_id": "inspector-surface",
+      "language": "en",
+      "query": "Inspect a component's saved raw serialized surface and object references.",
+      "accepted_tools": ["inspect_serialized_surface"],
+      "forbidden_tools": ["set_property"],
+      "safety_critical": true,
+      "rationale": "read-only serialized surface inspection"
+    },
+    {
+      "id": "symbol-discovery-ja",
+      "pair_id": "symbol-discovery",
+      "language": "ja",
+      "query": "アセットの中にある対象を名前や階層から見つけ、候補を探索したい。",
+      "accepted_tools": ["get_unity_symbols", "find_unity_symbol"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "ambiguous symbol discovery"
+    },
+    {
+      "id": "symbol-discovery-en",
+      "pair_id": "symbol-discovery",
+      "language": "en",
+      "query": "Explore candidates in an asset by name or hierarchy to locate a target.",
+      "accepted_tools": ["get_unity_symbols", "find_unity_symbol"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "ambiguous symbol discovery"
+    },
+    {
+      "id": "project-status-ja",
+      "pair_id": "project-status",
+      "language": "ja",
+      "query": "現在のセッション、watcher、Editor の状態だけを確認したい。Bridge は配置しない。",
+      "accepted_tools": ["get_project_status"],
+      "forbidden_tools": ["deploy_bridge"],
+      "safety_critical": true,
+      "rationale": "read-only project status"
+    },
+    {
+      "id": "project-status-en",
+      "pair_id": "project-status",
+      "language": "en",
+      "query": "Check only the current session, watcher, and Editor status without deploying a Bridge.",
+      "accepted_tools": ["get_project_status"],
+      "forbidden_tools": ["deploy_bridge"],
+      "safety_critical": true,
+      "rationale": "read-only project status"
+    },
+    {
+      "id": "console-read-ja",
+      "pair_id": "console-read",
+      "language": "ja",
+      "query": "Unity Console のログを変更せずに読みたい。",
+      "accepted_tools": ["editor_console"],
+      "forbidden_tools": ["editor_run_script"],
+      "safety_critical": true,
+      "rationale": "read-only Console inspection"
+    },
+    {
+      "id": "console-read-en",
+      "pair_id": "console-read",
+      "language": "en",
+      "query": "Read Unity Console logs without mutating the project.",
+      "accepted_tools": ["editor_console"],
+      "forbidden_tools": ["editor_run_script"],
+      "safety_critical": true,
+      "rationale": "read-only Console inspection"
+    },
+    {
+      "id": "transform-read-ja",
+      "pair_id": "transform-read",
+      "language": "ja",
+      "query": "ライブの GameObject の position、rotation、scale、親を読み取りたい。",
+      "accepted_tools": ["editor_get_transform"],
+      "forbidden_tools": ["editor_set_parent"],
+      "safety_critical": true,
+      "rationale": "read-only Transform inspection"
+    },
+    {
+      "id": "transform-read-en",
+      "pair_id": "transform-read",
+      "language": "en",
+      "query": "Read a live GameObject's position, rotation, scale, and parent.",
+      "accepted_tools": ["editor_get_transform"],
+      "forbidden_tools": ["editor_set_parent"],
+      "safety_critical": true,
+      "rationale": "read-only Transform inspection"
+    },
+    {
+      "id": "material-where-used-ja",
+      "pair_id": "material-where-used",
+      "language": "ja",
+      "query": "指定したマテリアルを使っている Renderer を、値を変更せずに逆引きしたい。",
+      "accepted_tools": ["editor_find_renderers_by_material"],
+      "forbidden_tools": ["editor_set_material_property"],
+      "safety_critical": true,
+      "rationale": "read-only material reverse lookup"
+    },
+    {
+      "id": "material-where-used-en",
+      "pair_id": "material-where-used",
+      "language": "en",
+      "query": "Find renderers using a supplied material without changing any material value.",
+      "accepted_tools": ["editor_find_renderers_by_material"],
+      "forbidden_tools": ["editor_set_material_property"],
+      "safety_critical": true,
+      "rationale": "read-only material reverse lookup"
+    },
+    {
+      "id": "live-parent-change-ja",
+      "pair_id": "live-parent-change",
+      "language": "ja",
+      "query": "ライブの既存 GameObject の親子関係を Undo 対応で明示的に変更したい。",
+      "accepted_tools": ["editor_set_parent"],
+      "forbidden_tools": ["editor_run_script"],
+      "safety_critical": true,
+      "rationale": "explicit live hierarchy mutation"
+    },
+    {
+      "id": "live-parent-change-en",
+      "pair_id": "live-parent-change",
+      "language": "en",
+      "query": "Explicitly change a live existing GameObject's parent with Undo support.",
+      "accepted_tools": ["editor_set_parent"],
+      "forbidden_tools": ["editor_run_script"],
+      "safety_critical": true,
+      "rationale": "explicit live hierarchy mutation"
+    },
+    {
+      "id": "raw-property-read-ja",
+      "pair_id": "raw-property-read",
+      "language": "ja",
+      "query": "ライブのコンポーネントから一つの raw propertyPath の型と値を読み取りたい。",
+      "accepted_tools": ["editor_serialized_property_read"],
+      "forbidden_tools": ["editor_serialized_property_write"],
+      "safety_critical": true,
+      "rationale": "read-only raw property inspection"
+    },
+    {
+      "id": "raw-property-read-en",
+      "pair_id": "raw-property-read",
+      "language": "en",
+      "query": "Read the type and value for one raw propertyPath on a live component.",
+      "accepted_tools": ["editor_serialized_property_read"],
+      "forbidden_tools": ["editor_serialized_property_write"],
+      "safety_critical": true,
+      "rationale": "read-only raw property inspection"
+    },
+    {
+      "id": "world-upload-ja",
+      "pair_id": "world-upload",
+      "language": "ja",
+      "query": "VRChat ワールドを明示的にビルドしてアップロードしたい。反射操作は行わない。",
+      "accepted_tools": ["vrcsdk_upload"],
+      "forbidden_tools": ["editor_reflect"],
+      "safety_critical": true,
+      "rationale": "dangerous world upload"
+    },
+    {
+      "id": "world-upload-en",
+      "pair_id": "world-upload",
+      "language": "en",
+      "query": "Explicitly build and upload a VRChat world without using reflection.",
+      "accepted_tools": ["vrcsdk_upload"],
+      "forbidden_tools": ["editor_reflect"],
+      "safety_critical": true,
+      "rationale": "dangerous world upload"
+    },
+    {
+      "id": "animation-inspect-ja",
+      "pair_id": "animation-inspect",
+      "language": "ja",
+      "query": "AnimationClip の curves と events を生成や適用をせずに調べたい。",
+      "accepted_tools": ["editor_inspect_animation_clip"],
+      "forbidden_tools": ["editor_create_animation_clip", "editor_apply_animation_clip"],
+      "safety_critical": true,
+      "rationale": "read-only animation inspection"
+    },
+    {
+      "id": "animation-inspect-en",
+      "pair_id": "animation-inspect",
+      "language": "en",
+      "query": "Inspect an AnimationClip's curves and events without creating or applying a clip.",
+      "accepted_tools": ["editor_inspect_animation_clip"],
+      "forbidden_tools": ["editor_create_animation_clip", "editor_apply_animation_clip"],
+      "safety_critical": true,
+      "rationale": "read-only animation inspection"
+    },
+    {
+      "id": "batch-create-ja",
+      "pair_id": "batch-create",
+      "language": "ja",
+      "query": "複数の GameObject を一つの Undo グループでまとめて生成したい。",
+      "accepted_tools": ["editor_batch_create"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "batched object creation"
+    },
+    {
+      "id": "batch-create-en",
+      "pair_id": "batch-create",
+      "language": "en",
+      "query": "Create several GameObjects together in one Undo group.",
+      "accepted_tools": ["editor_batch_create"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "batched object creation"
+    },
+    {
+      "id": "script-execution-ja",
+      "pair_id": "script-execution",
+      "language": "ja",
+      "query": "確認付きで C# スニペットをコンパイルして同期的に実行したい。非同期送信はしない。",
+      "accepted_tools": ["editor_run_script"],
+      "forbidden_tools": ["editor_run_script_submit"],
+      "safety_critical": true,
+      "rationale": "confirmed synchronous script execution"
+    },
+    {
+      "id": "script-execution-en",
+      "pair_id": "script-execution",
+      "language": "en",
+      "query": "Compile and run a confirmed C# snippet synchronously instead of submitting it asynchronously.",
+      "accepted_tools": ["editor_run_script"],
+      "forbidden_tools": ["editor_run_script_submit"],
+      "safety_critical": true,
+      "rationale": "confirmed synchronous script execution"
+    },
+    {
+      "id": "prefab-stage-open-ja",
+      "pair_id": "prefab-stage-open",
+      "language": "ja",
+      "query": "既存の Prefab を Prefab Stage で開いて調べたい。",
+      "accepted_tools": ["editor_open_prefab"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "open an existing Prefab Stage"
+    },
+    {
+      "id": "prefab-stage-open-en",
+      "pair_id": "prefab-stage-open",
+      "language": "en",
+      "query": "Open an existing Prefab in Prefab Stage for inspection.",
+      "accepted_tools": ["editor_open_prefab"],
+      "forbidden_tools": [],
+      "safety_critical": false,
+      "rationale": "open an existing Prefab Stage"
+    },
+    {
+      "id": "udon-component-add-ja",
+      "pair_id": "udon-component-add",
+      "language": "ja",
+      "query": "UdonSharpBehaviour 派生コンポーネントを明示的に upsert し、初期フィールドを適用したい。",
+      "accepted_tools": ["editor_add_udonsharp_component"],
+      "forbidden_tools": ["editor_remove_component"],
+      "safety_critical": true,
+      "rationale": "confirmed UdonSharp component upsert"
+    },
+    {
+      "id": "udon-component-add-en",
+      "pair_id": "udon-component-add",
+      "language": "en",
+      "query": "Explicitly upsert a UdonSharpBehaviour component and apply its initial fields.",
+      "accepted_tools": ["editor_add_udonsharp_component"],
+      "forbidden_tools": ["editor_remove_component"],
+      "safety_critical": true,
+      "rationale": "confirmed UdonSharp component upsert"
+    }
+  ]
+}

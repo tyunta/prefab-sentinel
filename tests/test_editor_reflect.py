@@ -107,17 +107,104 @@ class TestEditorReflectResponseUnwrap(unittest.TestCase):
     def test_should_pass_through_bridge_error_response(self) -> None:
         bridge_resp = {
             "success": False,
-            "severity": "error",
+            "severity": "warning",
             "code": "EDITOR_BRIDGE_TIMEOUT",
             "message": "Timed out",
-            "data": {},
-            "diagnostics": [],
+            "data": {"action": "editor_reflect"},
+            "diagnostics": [
+                {
+                    "severity": "warning",
+                    "code": "EDITOR_BRIDGE_TIMEOUT",
+                    "message": "Timed out",
+                    "data": {},
+                }
+            ],
         }
-        with patch("prefab_sentinel.mcp_tools_editor_advanced.send_action", return_value=bridge_resp):
-            result = structured_payload(call_tool_result(self.server,"editor_reflect", {"action": "search", "query": "Foo"})
+        with patch(
+            "prefab_sentinel.mcp_tools_editor_advanced.send_action",
+            return_value=bridge_resp,
+        ):
+            result = structured_payload(
+                call_tool_result(
+                    self.server,
+                    "editor_reflect",
+                    {"action": "search", "query": "Foo"},
+                )
             )
-        self.assertFalse(result["success"])
-        self.assertEqual("EDITOR_BRIDGE_TIMEOUT", result["code"])
+
+        self.assertEqual(bridge_resp, result)
+
+    def test_should_reject_malformed_common_and_reflect_payload_shapes(self) -> None:
+        malformed_responses = {
+            "string success": {
+                "success": "false",
+                "severity": "info",
+                "code": "EDITOR_REFLECT_OK",
+                "message": "OK",
+                "data": {
+                    "reflect_result_json": json.dumps({"arbitrary": "value"}),
+                },
+                "diagnostics": [],
+            },
+            "numeric success": {
+                "success": 1,
+                "severity": "info",
+                "code": "EDITOR_REFLECT_OK",
+                "message": "OK",
+                "data": {
+                    "reflect_result_json": json.dumps({"arbitrary": "value"}),
+                },
+                "diagnostics": [],
+            },
+            "non-object data": {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_REFLECT_OK",
+                "message": "OK",
+                "data": [],
+                "diagnostics": [],
+            },
+            "non-string reflect JSON": {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_REFLECT_OK",
+                "message": "OK",
+                "data": {"reflect_result_json": 7},
+                "diagnostics": [],
+            },
+            "decoded array": {
+                "success": True,
+                "severity": "info",
+                "code": "EDITOR_REFLECT_OK",
+                "message": "OK",
+                "data": {"reflect_result_json": json.dumps(["arbitrary", "value"])},
+                "diagnostics": [],
+            },
+        }
+
+        for label, bridge_resp in malformed_responses.items():
+            with self.subTest(label=label), patch(
+                "prefab_sentinel.mcp_tools_editor_advanced.send_action",
+                return_value=bridge_resp,
+            ):
+                result = structured_payload(
+                    call_tool_result(
+                        self.server,
+                        "editor_reflect",
+                        {"action": "get_type", "class_name": "Transform"},
+                    )
+                )
+
+            self.assertEqual(
+                (False, "error", "EDITOR_REFLECT_RESPONSE_SCHEMA", {}, []),
+                (
+                    result["success"],
+                    result["severity"],
+                    result["code"],
+                    result["data"],
+                    result["diagnostics"],
+                ),
+            )
 
     def test_should_accept_valid_scope_values(self) -> None:
         for scope in ("unity", "packages", "project", "all"):

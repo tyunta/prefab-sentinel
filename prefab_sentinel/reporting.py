@@ -38,11 +38,20 @@ def extract_ref_scan_data(payload_data: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, Any]:
-    steps = payload_data.get("steps", [])
-    if not isinstance(steps, list):
-        return {}
-
+    """Extract audited v1 sections and current runtime pipeline step summaries."""
     runtime: dict[str, Any] = {}
+    if payload_data.get("schema_version") == "runtime_validation_report.v1":
+        for section in ("preflight", "compile", "clientsim"):
+            section_data = payload_data.get(section)
+            if isinstance(section_data, dict):
+                runtime[section] = dict(section_data)
+        terminal_result = payload_data.get("result", {})
+        steps = terminal_result.get("steps", []) if isinstance(terminal_result, dict) else []
+    else:
+        steps = payload_data.get("steps", [])
+    if not isinstance(steps, list):
+        return runtime
+
     for step in steps:
         if not isinstance(step, dict):
             continue
@@ -74,7 +83,7 @@ def extract_runtime_validation_data(payload_data: dict[str, Any]) -> dict[str, A
                 "warning_count": data.get("warning_count", 0),
                 "allow_warnings": data.get("allow_warnings", False),
             }
-        elif step_name in {"compile_udonsharp", "run_clientsim", "collect_unity_console"}:
+        elif step_name in {"collect_unity_console", "collect_editor_console"}:
             runtime[step_name] = {
                 "code": result.get("code"),
                 "success": result.get("success"),

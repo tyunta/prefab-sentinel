@@ -176,32 +176,6 @@ namespace PrefabSentinel
             };
         }
 
-        private static EditorControlResponse HandleRunIntegrationTests()
-        {
-            try
-            {
-                var result = UnityIntegrationTests.RunTestSuite();
-                string json = JsonUtility.ToJson(result, true);
-                if (result.success)
-                    return BuildSuccess("EDITOR_CTRL_TESTS_PASSED", json,
-                        data: new EditorControlData { executed = true });
-                return BuildError("EDITOR_CTRL_TESTS_FAILED", json);
-            }
-            catch (Exception ex)
-            {
-                // Issue #251: align with the leak-safe pattern adopted
-                // for the four run-script catch sites under issue #216.
-                // The MCP-bound envelope carries a fixed surface-
-                // identifying string only; the full exception detail is
-                // mirrored to the Unity Console via Debug.LogWarning so
-                // a local operator can still triage the failure.
-                Debug.LogWarning(
-                    $"[PrefabSentinel] HandleRunIntegrationTests: integration-test suite threw: {ex}");
-                return BuildError(
-                    "EDITOR_CTRL_TESTS_ERROR",
-                    "editor_run_tests: integration-test suite threw an exception.");
-            }
-        }
 
         // ── Run-script (#74 / #108 / #116) ──
 
@@ -244,20 +218,6 @@ namespace PrefabSentinel
         private const float RecompileAndWaitDefaultTimeoutSec =
             RecompileTimeoutValidator.DefaultTimeoutSec;
 
-        /// <summary>
-        /// Builds the single post-reload reload-wait poll (issue #69).
-        /// It waits for the domain reload to finish — observing only the
-        /// reload counter and the deadline — and then runs the
-        /// caller-supplied reload-complete action.  Issue #203: the
-        /// ``CompilationPipeline.compilationFinished`` event is the
-        /// authoritative pre-reload terminator (owned by the shared
-        /// compile-watch barrier), so this poll never reads the assembly
-        /// modification time.  Every reload-wait consumer —
-        /// ``editor_recompile_and_wait``, both ``execute_menu_item`` paths,
-        /// and the compile-aware ``editor_refresh`` — registers this one
-        /// builder with its own reload-complete action, so the poll holds
-        /// no handler-specific terminal outcome.
-        /// </summary>
         private static EditorApplication.CallbackFunction BuildRecompileReloadWaitPoll(
             string responsePath,
             long callTimeMs,

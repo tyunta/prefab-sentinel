@@ -1,7 +1,7 @@
 """Tests for issue #229 — validate-refs refresh flag and stale-cache hint.
 
 The orchestrator entry point exposes a ``refresh_guid_index`` flag that
-invalidates the resolver's GUID index cache before scanning. On the
+invalidates the resolver's GUID index and scope-file caches before scanning. On the
 failure path (any missing-asset GUIDs reported and the refresh flag not
 set), the orchestrator runs a one-shot fresh meta-file scan and emits a
 ``STALE_GUID_INDEX_HINT`` warning diagnostic when the intersection of
@@ -22,12 +22,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from prefab_sentinel.contracts import Severity
+from prefab_sentinel.mcp_patch_writer_boundary import execute_patch_writer
 from prefab_sentinel.orchestrator_validation import (
     STALE_GUID_INDEX_HINT_DETAIL,
     validate_refs,
 )
 from prefab_sentinel.services import reference_resolver as _reference_resolver
 from prefab_sentinel.services.reference_resolver import ReferenceResolverService
+from prefab_sentinel.session import ProjectSession
 from tests.bridge_test_helpers import write_file
 
 _COLLECT_GUID_INDEX_TARGET = (
@@ -141,10 +143,60 @@ def _drop_meta_for_guid(resolver: ReferenceResolverService, guid: str) -> Path:
 
 
 class RefreshFlagInvalidationTests(unittest.TestCase):
-    """The ``refresh_guid_index`` flag drives a single cache invalidation
-    call before the resolver scans, and the default value leaves the
-    cache untouched.
+    """Explicit refresh updates GUIDs and source inventory before scanning;
+    the default leaves both caches untouched.
     """
+
+    def test_refresh_discovers_renamed_copy_after_disconnected_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            scope = root / "Assets" / "Scope"
+            for number, name in enumerate(("Source", "Baseline", "Sentinel", "Motion"), 1):
+                write_file(scope / (name + ".mat"),
+                           "%YAML 1.1\n--- !u!21 &2100000\nMaterial:\n"
+                           f"  m_Name: {name}\n"
+                           "  m_Shader: {fileID: 4800000, guid: 0000000000000000f000000000000000, type: 0}\n")
+                write_file(scope / (name + ".mat.meta"), f"guid: {number:032x}\n")
+            session = ProjectSession(project_root=root)
+            orch = session.get_orchestrator()
+            before = orch.validate_refs(str(scope), details=True, refresh_guid_index=True)
+            before_scan = before.data["steps"][0]["result"]["data"]
+            self.assertEqual((before.success, before_scan["scanned_files"], before_scan["scanned_references"]),
+                             (True, 4, 4))
+
+            with patch("prefab_sentinel.orchestrator.bridge_status", return_value={"connected": False}):
+                copied = execute_patch_writer(
+                    "copy_asset", True, session.get_orchestrator,
+                    lambda current: current.copy_asset("Assets/Scope/Source.mat", "Assets/Scope/Copy.mat",
+                                                       dry_run=False, change_reason="temporary regression copy"),
+                    session.invalidate_all,
+                )
+                renamed = execute_patch_writer(
+                    "rename_asset", True, session.get_orchestrator,
+                    lambda current: current.rename_asset("Assets/Scope/Copy.mat", "Renamed.mat",
+                                                         dry_run=False, change_reason="temporary regression rename"),
+                    session.invalidate_all,
+                )
+            self.assertTrue(copied["success"], copied)
+            self.assertTrue(renamed["success"], renamed)
+            self.assertEqual((copied["success"], copied["code"], copied["data"]["auto_refresh"]),
+                             (True, "ASSET_COPY_APPLIED", "skipped"))
+            self.assertEqual((renamed["success"], renamed["code"], renamed["data"]["auto_refresh"]),
+                             (True, "ASSET_RENAME_APPLIED", "skipped"))
+            self.assertTrue((scope / "Renamed.mat").is_file())
+            self.assertFalse((scope / "Copy.mat").exists())
+            self.assertIs(session.get_orchestrator(), orch)
+            cached = orch.validate_refs(str(scope), details=True)
+            cached_scan = cached.data["steps"][0]["result"]["data"]
+            self.assertEqual((cached.success, cached_scan["scanned_files"], cached_scan["scanned_references"]),
+                             (True, 4, 4))
+            self.assertNotIn(copied["data"]["new_guid"], orch.reference_resolver._guid_map())
+            after = orch.validate_refs(str(scope), details=True, refresh_guid_index=True)
+            after_scan = after.data["steps"][0]["result"]["data"]
+            self.assertEqual(orch.reference_resolver._guid_map()[copied["data"]["new_guid"]], scope / "Renamed.mat")
+            self.assertEqual((after.success, after.code, after_scan["broken_count"]),
+                             (True, "VALIDATE_REFS_RESULT", 0))
+            self.assertEqual((after_scan["scanned_files"], after_scan["scanned_references"]), (5, 5))
 
     def test_refresh_flag_invalidates_cache_before_scan(self) -> None:
         """Issue #229 — a caller that asserts the cache is stale forces a

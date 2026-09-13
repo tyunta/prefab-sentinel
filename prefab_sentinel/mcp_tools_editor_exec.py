@@ -1,5 +1,5 @@
-"""MCP tool: ``editor_run_script`` — compile + run a C# snippet inside the
-Unity Editor in a single step (issue #74).
+"""MCP tool: ``editor_run_script`` — compile + run a complete C# compilation
+unit inside the Unity Editor in a single step (issues #74 and #201).
 
 Contract (per spec.md §"Batch 2 — #74 editor_run_script"):
 
@@ -15,9 +15,10 @@ Contract (per spec.md §"Batch 2 — #74 editor_run_script"):
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server import MCPServer
+from pydantic import Field
 
 from prefab_sentinel.editor_bridge import DEFAULT_TIMEOUT_SEC, send_action
 from prefab_sentinel.mcp_validation import require_write_audit
@@ -68,6 +69,22 @@ DEFAULT_COMPILE_TIMEOUT_MS = 15000
 # an immediate error.
 COMPILE_TIMEOUT_MIN_MS = 1
 COMPILE_TIMEOUT_MAX_MS = 120000
+
+
+RUN_SCRIPT_CODE_DESCRIPTION = (
+    "Complete C# compilation unit (not a method body or statements). It must "
+    "declare `public static class PrefabSentinelTempScript` in the global "
+    "namespace with a parameterless `public static void Run()` or `public "
+    "static T Run()`. Supported T types are `string`, `bool`, numeric "
+    "primitives (`byte`, `sbyte`, `short`, `ushort`, `int`, `uint`, `long`, "
+    "`ulong`, `float`, `double`, `decimal`), or one-dimensional arrays "
+    "`string[]`, `bool[]`, `byte[]`, `short[]`, `int[]`, `long[]`, `float[]`, "
+    "`double[]`; null return values are accepted. Minimal executable example: "
+    "`public static class PrefabSentinelTempScript { public static void Run() "
+    "{ } }`"
+)
+
+RunScriptCode = Annotated[str, Field(description=RUN_SCRIPT_CODE_DESCRIPTION)]
 
 
 def _compile_timeout_out_of_range_envelope(value: int) -> dict[str, Any]:
@@ -295,17 +312,21 @@ def register_editor_exec_tools(server: MCPServer) -> None:
 
     @server.tool(name="editor_run_script")
     def _editor_run_script(
-        code: str,
+        code: RunScriptCode,
         confirm: bool = False,
         change_reason: str = "",
         compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
     ) -> dict[str, Any]:
-        """Run an arbitrary C# snippet inside the Unity Editor.
+        """Compile and run a complete C# compilation unit in the Unity Editor.
 
-        The snippet is written to ``Assets/Editor/_PrefabSentinelTemp/`` and
-        compiled by Unity; the bridge then invokes
-        ``PrefabSentinelTempScript.Run()``.  Temp files are always cleaned
-        up after execution (success or failure) and on Editor startup.
+        ``code`` must declare the global
+        ``public static class PrefabSentinelTempScript`` with a parameterless
+        public static ``Run()`` using one of the return types documented in its
+        input schema. The schema also contains a directly executable example.
+        The compilation unit is written to
+        ``Assets/Editor/_PrefabSentinelTemp/`` and compiled by Unity; the bridge
+        then invokes ``PrefabSentinelTempScript.Run()``. Temp files are always
+        cleaned up after execution (success or failure) and on Editor startup.
 
         This is a write-class tool:
 
@@ -330,17 +351,20 @@ def register_editor_exec_tools(server: MCPServer) -> None:
 
     @server.tool(name="editor_run_script_submit")
     def _editor_run_script_submit(
-        code: str,
+        code: RunScriptCode,
         confirm: bool = False,
         change_reason: str = "",
         compile_timeout_ms: int = DEFAULT_COMPILE_TIMEOUT_MS,
     ) -> dict[str, Any]:
-        """Stage a C# snippet asynchronously and return an opaque
+        """Stage a complete C# compilation unit asynchronously and return an opaque
         request id (issue #233).
 
         Args:
-            code: C# snippet that defines
-                ``PrefabSentinelTempScript.Run()``.
+            code: Must declare the global
+                ``public static class PrefabSentinelTempScript`` with a
+                parameterless public static ``Run()`` using one of the return
+                types documented in its input schema. The schema also contains
+                a directly executable example.
             confirm: Required ``True`` (writer audit gate).
             change_reason: Required non-empty audit reason.
             compile_timeout_ms: Compile-budget knob shared with the

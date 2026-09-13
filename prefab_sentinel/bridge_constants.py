@@ -15,14 +15,22 @@ UNITY_PROJECT_PATH_ENV = "UNITYTOOL_UNITY_PROJECT_PATH"
 UNITY_TIMEOUT_SEC_ENV = "UNITYTOOL_UNITY_TIMEOUT_SEC"
 UNITY_LOG_FILE_ENV = "UNITYTOOL_UNITY_LOG_FILE"
 BRIDGE_WATCH_DIR_ENV = "UNITYTOOL_BRIDGE_WATCH_DIR"
+BRIDGE_INSTANCE_ID_ENV = "UNITYTOOL_BRIDGE_INSTANCE_ID"
 
 # Bridge wire protocol version — must match ``ProtocolVersion`` in
 # ``tools/unity/PrefabSentinel.UnityEditorControlBridge.cs``.  Drift between
 # the two is surfaced by ``scripts/check_bridge_constants.py``.
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
+
+# Tagged request artifact emitted when Unity processes a request but cannot
+# publish the response through either the atomic or direct-write path.
+RESPONSE_PUBLICATION_FAILURE_SUFFIX = ".publication-failed.json"
 
 # Valid severity levels for bridge responses
 VALID_SEVERITIES = frozenset({"info", "warning", "error", "critical"})
+
+# Maximum accepted Editor Bridge response-file size (16 MiB).
+BRIDGE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024
 
 # Issue #131: Python mirror of the C# ``ConsoleLogBuffer.DefaultCapacity``
 # constant.  The ``capture_console_logs`` request validator (Python and C#)

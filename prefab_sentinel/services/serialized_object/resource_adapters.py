@@ -90,10 +90,18 @@ class _JsonResourceAdapter(ResourceAdapter):
     supported_kind = "json"
 
     def dry_run(self, service, context):  # type: ignore[override]
-        return service.dry_run_patch(target=context.target, ops=context.ops)
+        return service.dry_run_patch(
+            target=context.target,
+            ops=context.ops,
+            resource_kind=context.kind,
+        )
 
     def apply(self, service, context):  # type: ignore[override]
-        return service.apply_and_save(target=context.target, ops=context.ops)
+        return service.apply_and_save(
+            target=context.target,
+            ops=context.ops,
+            resource_kind=context.kind,
+        )
 
 
 class _PrefabResourceAdapter(_BridgeBackedAdapter):
@@ -119,7 +127,11 @@ class _BridgeBackedAssetResourceAdapter(_BridgeBackedAdapter):
 
     def dry_run(self, service, context):  # type: ignore[override]
         if context.mode == "open":
-            return service.dry_run_patch(target=context.target, ops=context.ops)
+            return service.dry_run_patch(
+                target=context.target,
+                ops=context.ops,
+                resource_kind=context.kind,
+            )
         diagnostics, preview = validate_asset_create_ops(
             target=context.target, kind=context.kind, ops=context.ops
         )

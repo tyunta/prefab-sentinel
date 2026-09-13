@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from mcp.server import MCPServer
 
+from prefab_sentinel.bridge_response import is_bridge_response_envelope
 from prefab_sentinel.editor_bridge import bridge_status, send_action
 from prefab_sentinel.mcp_helpers import read_asset
 from prefab_sentinel.session import ProjectSession
@@ -47,10 +48,12 @@ def _offline_freshness_marker() -> dict[str, Any] | None:
     except Exception:
         logger.debug("get_editor_state failed for freshness marker", exc_info=True)
         return None
-    if not resp.get("success"):
+    if not is_bridge_response_envelope(resp) or resp["success"] is False:
         return None
-    editor_state = resp.get("data", {}).get("editor_state") or {}
-    if editor_state.get("has_unsaved_changes"):
+    editor_state = resp["data"].get("editor_state")
+    if not isinstance(editor_state, dict):
+        return None
+    if editor_state.get("has_unsaved_changes") is True:
         return dict(_FRESHNESS_MARKER)
     return None
 

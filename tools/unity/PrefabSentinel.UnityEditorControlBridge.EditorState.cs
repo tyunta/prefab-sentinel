@@ -12,6 +12,9 @@ namespace PrefabSentinel
         public sealed class EditorStateSnapshot
         {
             public string state_source = string.Empty;
+            public string unity_version = string.Empty;
+            public RequiredPackageStatus[] required_packages =
+                Array.Empty<RequiredPackageStatus>();
             public bool is_playing = false;
             public bool is_will_change_playmode = false;
             public bool is_compiling = false;
@@ -28,6 +31,15 @@ namespace PrefabSentinel
             public string[] dirty_material_paths = Array.Empty<string>();
             public string[] dirty_asset_paths = Array.Empty<string>();
             public EditorSceneStatus[] open_scenes = Array.Empty<EditorSceneStatus>();
+        }
+
+
+        [Serializable]
+        public sealed class RequiredPackageStatus
+        {
+            public string name = string.Empty;
+            public bool ready = false;
+            public string version = string.Empty;
         }
 
         [Serializable]
@@ -141,12 +153,71 @@ namespace PrefabSentinel
                 || snapshot.dirty_asset_paths.Length > 0;
         }
 
+
+        private static RequiredPackageStatus RequiredPackage(string packageName)
+        {
+            UnityEditor.PackageManager.PackageInfo matchedPackage = null;
+            foreach (UnityEditor.PackageManager.PackageInfo package
+                in UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
+            {
+                if (!string.Equals(
+                    package.name,
+                    packageName,
+                    StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matchedPackage = package;
+                break;
+            }
+
+            return new RequiredPackageStatus
+            {
+                name = packageName,
+                ready = matchedPackage != null,
+                version = matchedPackage != null
+                    ? matchedPackage.version
+                    : string.Empty,
+            };
+        }
+
+
+        private static RequiredPackageStatus RequiredUdonSharpPackage()
+        {
+            RequiredPackageStatus worldsPackage =
+                RequiredPackage("com.vrchat.worlds");
+            bool assemblyLoaded = false;
+            foreach (System.Reflection.Assembly assembly
+                in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (assembly.GetName().Name == "UdonSharp.Editor")
+                {
+                    assemblyLoaded = true;
+                    break;
+                }
+            }
+            return new RequiredPackageStatus
+            {
+                name = "udonsharp",
+                ready = worldsPackage.ready && assemblyLoaded,
+                version = worldsPackage.version,
+            };
+        }
+
         private static EditorControlResponse HandleGetEditorState()
         {
             var diagnostics = new List<EditorControlDiagnostic>();
             var snapshot = new EditorStateSnapshot
             {
                 state_source = "live_editor",
+                unity_version = Application.unityVersion,
+                required_packages = new[]
+                {
+                    RequiredPackage("com.vrchat.base"),
+                    RequiredPackage("com.vrchat.worlds"),
+                    RequiredUdonSharpPackage(),
+                },
                 is_playing = EditorApplication.isPlaying,
                 is_will_change_playmode = EditorApplication.isPlayingOrWillChangePlaymode,
                 is_compiling = EditorApplication.isCompiling,
@@ -264,8 +335,13 @@ namespace PrefabSentinel
                 var paths = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var asset in Resources.FindObjectsOfTypeAll<UnityEngine.Object>())
                 {
-                    if (!EditorUtility.IsDirty(asset))
+                    if (asset == null
+                        || !EditorUtility.IsPersistent(asset)
+                        || !EditorUtility.IsDirty(asset)
+                        || !AssetDatabase.IsNativeAsset(asset))
+                    {
                         continue;
+                    }
                     var path = AssetDatabase.GetAssetPath(asset);
                     if (IsDirtyAssetIdentityPath(path))
                         paths.Add(path);

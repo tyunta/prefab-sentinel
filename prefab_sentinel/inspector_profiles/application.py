@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from importlib.resources import files
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any
 
 from prefab_sentinel.editor_bridge import send_action
@@ -34,6 +35,234 @@ from prefab_sentinel.patch_plan import PLAN_VERSION
 from prefab_sentinel.session import ProjectSession
 from prefab_sentinel.unity_assets_path import resolve_asset_path
 from prefab_sentinel.wsl_compat import to_windows_path
+
+_SCENE_INSPECTION_FAILURES: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        "EDITOR_CTRL_INSPECTOR_SCENE_DIRTY": (
+            "INSPECTOR_SCENE_DIRTY",
+            "The loaded Scene has unsaved changes; save or discard them before inspecting its last-saved serialized surface.",
+        ),
+        "EDITOR_CTRL_INSPECTOR_SCENE_AMBIGUOUS": (
+            "INSPECTOR_SCENE_AMBIGUOUS",
+            "The requested Scene is loaded more than once; close duplicate instances before inspecting its serialized surface.",
+        ),
+        "EDITOR_CTRL_INSPECTOR_SCENE_RESTORE_FAILED": (
+            "INSPECTOR_SCENE_RESTORE_FAILED",
+            "Scene inspection could not restore the Editor Scene state.",
+        ),
+    }
+)
+_SCENE_OWNERSHIP_TOKENS = frozenset({"none", "borrowed", "owned"})
+_SCENE_RESULT_TOKENS = frozenset({"not_attempted", "succeeded", "failed"})
+_SCENE_FAILED_POSTCONDITIONS = frozenset(
+    {
+        "startup_scene_order",
+        "active_scene",
+        "startup_scene_dirty_state",
+        "borrowed_scene_missing",
+        "owned_close_not_attempted",
+        "owned_close_failed",
+        "owned_scene_present",
+        "active_scene_restore_failed",
+    }
+)
+_SCENE_EVIDENCE_KEYS = frozenset(
+    {
+        "asset_path",
+        "ownership",
+        "matched_handles",
+        "cleanup_attempted",
+        "close_result",
+        "active_restore_attempted",
+        "active_restore_result",
+        "before",
+        "after",
+        "failed_postconditions",
+    }
+)
+_SCENE_SNAPSHOT_KEYS = frozenset({"scenes", "active_handle", "active_path"})
+_SCENE_SNAPSHOT_ENTRY_KEYS = frozenset({"order", "handle", "path", "dirty"})
+
+
+def _is_json_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_project_relative_scene_path(value: object, *, allow_empty: bool) -> bool:
+    if not isinstance(value, str):
+        return False
+    if allow_empty and not value:
+        return True
+    path = PurePosixPath(value)
+    return (
+        len(path.parts) > 1
+        and not path.is_absolute()
+        and "\\" not in value
+        and ".." not in path.parts
+        and path.parts[0] == "Assets"
+    )
+
+
+def _parse_scene_snapshot(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or set(value) != _SCENE_SNAPSHOT_KEYS:
+        return None
+    scenes = value.get("scenes")
+    if not isinstance(scenes, list):
+        return None
+    parsed_scenes: list[dict[str, Any]] = []
+    for entry in scenes:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != _SCENE_SNAPSHOT_ENTRY_KEYS
+            or not _is_json_int(entry.get("order"))
+            or not _is_json_int(entry.get("handle"))
+            or not _is_project_relative_scene_path(entry.get("path"), allow_empty=True)
+            or not isinstance(entry.get("dirty"), bool)
+        ):
+            return None
+        parsed_scenes.append(
+            {
+                "order": entry["order"],
+                "handle": entry["handle"],
+                "path": entry["path"],
+                "dirty": entry["dirty"],
+            }
+        )
+    if not _is_json_int(value.get("active_handle")) or not _is_project_relative_scene_path(
+        value.get("active_path"),
+        allow_empty=True,
+    ):
+        return None
+    return {
+        "scenes": parsed_scenes,
+        "active_handle": value["active_handle"],
+        "active_path": value["active_path"],
+    }
+
+
+def _parse_scene_lifecycle_evidence(
+    response: dict[str, Any],
+    requested_asset_path: str,
+) -> dict[str, Any] | None:
+    requested_path = PurePosixPath(requested_asset_path)
+    if (
+        response.get("success") is not False
+        or requested_path.is_absolute()
+        or "\\" in requested_asset_path
+        or ".." in requested_path.parts
+        or not requested_path.parts
+        or requested_path.parts[0] != "Assets"
+    ):
+        return None
+    raw_code = response.get("code")
+    if not isinstance(raw_code, str):
+        return None
+    failure = _SCENE_INSPECTION_FAILURES.get(raw_code)
+    if failure is None:
+        return None
+    diagnostics = response.get("diagnostics")
+    if not isinstance(diagnostics, list) or len(diagnostics) != 1:
+        return None
+    diagnostic = diagnostics[0]
+    if not isinstance(diagnostic, dict):
+        return None
+    _, detail = failure
+    if (
+        diagnostic.get("severity") != "error"
+        or diagnostic.get("code") != raw_code
+        or diagnostic.get("path") != requested_asset_path
+        or diagnostic.get("detail") != detail
+        or not isinstance(diagnostic.get("location"), str)
+        or not isinstance(diagnostic.get("evidence"), str)
+    ):
+        return None
+    try:
+        evidence = json.loads(diagnostic["evidence"])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(evidence, dict) or set(evidence) != _SCENE_EVIDENCE_KEYS:
+        return None
+    ownership = evidence.get("ownership")
+    matched_handles = evidence.get("matched_handles")
+    close_result = evidence.get("close_result")
+    active_restore_result = evidence.get("active_restore_result")
+    failed_postconditions = evidence.get("failed_postconditions")
+    if (
+        evidence.get("asset_path") != requested_asset_path
+        or not isinstance(ownership, str)
+        or ownership not in _SCENE_OWNERSHIP_TOKENS
+        or diagnostic["location"] != ownership
+        or not isinstance(matched_handles, list)
+        or not all(_is_json_int(handle) for handle in matched_handles)
+        or not isinstance(evidence.get("cleanup_attempted"), bool)
+        or not isinstance(evidence.get("active_restore_attempted"), bool)
+        or not isinstance(failed_postconditions, list)
+    ):
+        return None
+    if (
+        not isinstance(close_result, str)
+        or close_result not in _SCENE_RESULT_TOKENS
+        or not isinstance(active_restore_result, str)
+        or active_restore_result not in _SCENE_RESULT_TOKENS
+        or not all(
+            isinstance(postcondition, str)
+            and postcondition in _SCENE_FAILED_POSTCONDITIONS
+            for postcondition in failed_postconditions
+        )
+    ):
+        return None
+    before = _parse_scene_snapshot(evidence.get("before"))
+    after = _parse_scene_snapshot(evidence.get("after"))
+    if before is None or after is None:
+        return None
+    return {
+        "asset_path": requested_asset_path,
+        "ownership": ownership,
+        "matched_handles": matched_handles,
+        "cleanup_attempted": evidence["cleanup_attempted"],
+        "close_result": close_result,
+        "active_restore_attempted": evidence["active_restore_attempted"],
+        "active_restore_result": active_restore_result,
+        "before": before,
+        "after": after,
+        "failed_postconditions": failed_postconditions,
+    }
+
+
+def _scene_inspection_failure_response(
+    response: dict[str, Any],
+    requested_asset_path: str,
+) -> dict[str, Any] | None:
+    raw_code = response.get("code")
+    if not isinstance(raw_code, str):
+        return None
+    failure = _SCENE_INSPECTION_FAILURES.get(raw_code)
+    if failure is None:
+        return None
+    evidence = _parse_scene_lifecycle_evidence(response, requested_asset_path)
+    if evidence is None:
+        return None
+    public_code, message = failure
+    return _response(
+        False,
+        "error",
+        public_code,
+        message,
+        {},
+        [
+            {
+                "severity": "error",
+                "code": public_code,
+                "message": message,
+                "data": {
+                    "path": requested_asset_path,
+                    "location": evidence["ownership"],
+                    "detail": message,
+                    "evidence": evidence,
+                },
+            }
+        ],
+    )
 
 
 def _response(
@@ -755,6 +984,9 @@ class InspectorProfileApplication:
         if symbol_path is not None:
             request["symbol_path"] = symbol_path
         bridge_response = send_action(**request)
+        scene_failure = _scene_inspection_failure_response(bridge_response, asset_path)
+        if scene_failure is not None:
+            return scene_failure
         if (
             bridge_response.get("success") is False
             and bridge_response.get("code") == "EDITOR_CTRL_INSPECTOR_TARGET_NOT_FOUND"
@@ -807,6 +1039,12 @@ class InspectorProfileApplication:
             symbol_path,
             include_override_origin,
         )
+        if raw_response["code"] in {
+            "INSPECTOR_SCENE_DIRTY",
+            "INSPECTOR_SCENE_AMBIGUOUS",
+            "INSPECTOR_SCENE_RESTORE_FAILED",
+        }:
+            return raw_response
         bundled_root = Path(str(files("prefab_sentinel").joinpath("resources", "profiles")))
         repository = ProfileRepository(project_root, bundled_root)
         if not raw_response["success"]:

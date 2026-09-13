@@ -617,7 +617,7 @@ namespace PrefabSentinel
         /// segment (same-named siblings, no ``#N``) is reported as an
         /// error rather than first-picked.
         /// </summary>
-        private static bool TryResolveHierarchyPathWithResolver(
+        internal static bool TryResolveHierarchyPathWithResolver(
             GameObject root,
             string hierarchySelector,
             out Transform target,

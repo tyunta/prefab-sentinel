@@ -74,17 +74,29 @@ class SerializedObjectService:
         self,
         target: str,
         ops: list[dict[str, Any]],
+        resource_kind: str | None = None,
     ) -> ToolResponse:
         """Validate *ops* against *target* and return a preview envelope."""
-        return patch_dispatch.dry_run_patch(self, target, ops)
+        return patch_dispatch.dry_run_patch(
+            self,
+            target,
+            ops,
+            resource_kind=resource_kind,
+        )
 
     def apply_and_save(
         self,
         target: str,
         ops: list[dict[str, Any]],
+        resource_kind: str | None = None,
     ) -> ToolResponse:
         """Validate *ops*, apply them to *target*, and persist the result."""
-        return patch_dispatch.apply_and_save(self, target, ops)
+        return patch_dispatch.apply_and_save(
+            self,
+            target,
+            ops,
+            resource_kind=resource_kind,
+        )
 
     def dry_run_resource_plan(
         self,

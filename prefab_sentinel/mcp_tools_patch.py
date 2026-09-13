@@ -8,6 +8,11 @@ from typing import Any
 from mcp.server import MCPServer
 
 from prefab_sentinel.json_io import load_json
+from prefab_sentinel.mcp_patch_writer_boundary import (
+    dispatch_patch_writer,
+    execute_patch_writer,
+    project_patch_writer_refresh,
+)
 from prefab_sentinel.mcp_validation import require_change_reason
 from prefab_sentinel.patch_revert import revert_overrides as revert_overrides_impl
 from prefab_sentinel.patch_transaction_results import boundary_failure
@@ -54,15 +59,19 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(confirm, change_reason)
         if err is not None:
             return err
-        orch = session.get_orchestrator()
-        resp = orch.set_material_property(
-            target_path=asset_path,
-            property_name=property_name,
-            value=value,
-            dry_run=not confirm,
-            change_reason=change_reason or None,
+        return execute_patch_writer(
+            "set_material_property",
+            confirm,
+            session.get_orchestrator,
+            lambda orch: orch.set_material_property(
+                target_path=asset_path,
+                property_name=property_name,
+                value=value,
+                dry_run=not confirm,
+                change_reason=change_reason or None,
+            ),
+            session.invalidate_all,
         )
-        return resp.to_dict()
 
     @server.tool()
     def copy_asset(
@@ -86,14 +95,18 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(confirm, change_reason)
         if err is not None:
             return err
-        orch = session.get_orchestrator()
-        resp = orch.copy_asset(
-            source_path=source_path,
-            dest_path=dest_path,
-            dry_run=not confirm,
-            change_reason=change_reason or None,
+        return execute_patch_writer(
+            "copy_asset",
+            confirm,
+            session.get_orchestrator,
+            lambda orch: orch.copy_asset(
+                source_path=source_path,
+                dest_path=dest_path,
+                dry_run=not confirm,
+                change_reason=change_reason or None,
+            ),
+            session.invalidate_all,
         )
-        return resp.to_dict()
 
     @server.tool()
     def rename_asset(
@@ -117,14 +130,18 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(confirm, change_reason)
         if err is not None:
             return err
-        orch = session.get_orchestrator()
-        resp = orch.rename_asset(
-            asset_path=asset_path,
-            new_name=new_name,
-            dry_run=not confirm,
-            change_reason=change_reason or None,
+        return execute_patch_writer(
+            "rename_asset",
+            confirm,
+            session.get_orchestrator,
+            lambda orch: orch.rename_asset(
+                asset_path=asset_path,
+                new_name=new_name,
+                dry_run=not confirm,
+                change_reason=change_reason or None,
+            ),
+            session.invalidate_all,
         )
-        return resp.to_dict()
 
     @server.tool()
     def delete_asset(
@@ -151,16 +168,19 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(effective_apply, change_reason)
         if err is not None:
             return err
-        orch = session.get_orchestrator()
-        resolved_scope = session.resolve_scope(scope)
-        resp = orch.delete_assets(
-            [asset_path],
-            scope=resolved_scope,
-            dry_run=dry_run,
-            confirm=confirm,
-            change_reason=change_reason or None,
+        return execute_patch_writer(
+            "delete_asset",
+            effective_apply,
+            lambda: (session.get_orchestrator(), session.resolve_scope(scope)),
+            lambda acquired: acquired[0].delete_assets(
+                [asset_path],
+                scope=acquired[1],
+                dry_run=dry_run,
+                confirm=confirm,
+                change_reason=change_reason or None,
+            ),
+            session.invalidate_all,
         )
-        return resp.to_dict()
 
     @server.tool()
     def delete_assets(
@@ -187,16 +207,19 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(effective_apply, change_reason)
         if err is not None:
             return err
-        orch = session.get_orchestrator()
-        resolved_scope = session.resolve_scope(scope)
-        resp = orch.delete_assets(
-            asset_paths,
-            scope=resolved_scope,
-            dry_run=dry_run,
-            confirm=confirm,
-            change_reason=change_reason or None,
+        return execute_patch_writer(
+            "delete_assets",
+            effective_apply,
+            lambda: (session.get_orchestrator(), session.resolve_scope(scope)),
+            lambda acquired: acquired[0].delete_assets(
+                asset_paths,
+                scope=acquired[1],
+                dry_run=dry_run,
+                confirm=confirm,
+                change_reason=change_reason or None,
+            ),
+            session.invalidate_all,
         )
-        return resp.to_dict()
 
     @server.tool()
     def patch_apply(
@@ -205,31 +228,10 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         change_reason: str = "",
         out_report: str | None = None,
         scope: str | None = None,
-        runtime_scene: str | None = None,
-        runtime_profile: str = "default",
-        runtime_log_file: str | None = None,
-        runtime_since_timestamp: str | None = None,
-        runtime_allow_warnings: bool = False,
-        runtime_max_diagnostics: int = 200,
     ) -> dict[str, Any]:
         """Validate and apply a patch plan to Unity assets.
 
-        Two-phase workflow:
-        - confirm=False (default): dry-run validation only.
-        - confirm=True: applies changes and runs post-apply checks.
-
-        Args:
-            plan: Patch plan as JSON string. Must conform to plan_version "2".
-            confirm: Set True to apply (False = dry-run only).
-            change_reason: Required when confirm=True. Audit log reason.
-            out_report: Required audit report for a confirmed one-open-Prefab plan.
-            scope: Directory for post-apply reference validation.
-            runtime_scene: Scene path for post-apply runtime validation.
-            runtime_profile: ClientSim profile for runtime validation.
-            runtime_log_file: Unity log file path for runtime validation.
-            runtime_since_timestamp: Log cursor for runtime validation.
-            runtime_allow_warnings: Allow warnings in runtime validation.
-            runtime_max_diagnostics: Max diagnostics for runtime validation.
+        Runtime validation is a separate validate_runtime operation.
         """
         err = require_change_reason(confirm, change_reason)
         if err is not None:
@@ -276,12 +278,6 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
                 change_reason=change_reason or None,
                 out_report=out_report,
                 scope=scope,
-                runtime_scene=runtime_scene,
-                runtime_profile=runtime_profile,
-                runtime_log_file=runtime_log_file,
-                runtime_since_timestamp=runtime_since_timestamp,
-                runtime_allow_warnings=runtime_allow_warnings,
-                runtime_max_diagnostics=runtime_max_diagnostics,
                 transactional=True,
             )
         except ValueError:
@@ -334,16 +330,31 @@ def register_patch_tools(server: MCPServer, session: ProjectSession) -> None:
         err = require_change_reason(confirm, change_reason)
         if err is not None:
             return err
-        resp = revert_overrides_impl(
-            variant_path=asset_path,
-            target_file_id=target_file_id,
-            property_path=property_path,
-            dry_run=not confirm,
-            confirm=confirm,
-            change_reason=change_reason or None,
+        def dispatch_revert() -> dict[str, Any]:
+            response = revert_overrides_impl(
+                variant_path=asset_path,
+                target_file_id=target_file_id,
+                property_path=property_path,
+                dry_run=not confirm,
+                confirm=confirm,
+                change_reason=change_reason or None,
+            )
+            if confirm and response.success:
+                response = project_patch_writer_refresh(
+                    "revert_overrides",
+                    response,
+                    lambda: session.get_orchestrator().maybe_auto_refresh(),
+                    session.invalidate_all,
+                )
+            return response.to_dict()
+
+        result, failure = dispatch_patch_writer(
+            "revert_overrides",
+            confirm,
+            dispatch_revert,
+            session.invalidate_all,
         )
-        result = resp.to_dict()
-        if confirm and resp.success:
-            orch = session.get_orchestrator()
-            result["auto_refresh"] = orch.maybe_auto_refresh()
+        if failure is not None:
+            return failure
+        assert result is not None
         return result

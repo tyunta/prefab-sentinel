@@ -19,9 +19,9 @@ from prefab_sentinel.contracts import (
     ToolResponse,
     success_response,
 )
+from prefab_sentinel.wsl_compat import to_wsl_path
 
 DEFAULT_TIMEOUT_SEC = 300
-RUNTIME_PROTOCOL_VERSION = 1
 DEFAULT_EDITOR_POLL_INTERVAL = 1.0
 
 
@@ -29,7 +29,7 @@ def default_runtime_root(service_root: Path) -> Path:
     """Return the configured Unity project root, or *service_root* when unset."""
     configured_root = os.environ.get(UNITY_PROJECT_PATH_ENV, "").strip()
     if configured_root:
-        return Path(configured_root).expanduser()
+        return Path(to_wsl_path(configured_root)).expanduser()
     return service_root
 
 
